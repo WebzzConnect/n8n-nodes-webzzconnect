@@ -1,0 +1,60 @@
+{
+  "name": "n8n-nodes-webzzconnect",
+  "version": "0.4.0",
+  "description": "n8n community node for WebzzConnect: contacts, deals, conversations, WhatsApp templates and instant triggers.",
+  "license": "MIT",
+  "homepage": "https://api-connect.webzz.cloud",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WebzzConnect/n8n-nodes-webzzconnect.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WebzzConnect/n8n-nodes-webzzconnect/issues"
+  },
+  "keywords": [
+    "n8n-community-node-package",
+    "webzzconnect",
+    "crm",
+    "whatsapp",
+    "chatbot"
+  ],
+  "author": {
+    "name": "Webzz",
+    "email": "support@webzz.cloud"
+  },
+  "scripts": {
+    "build": "n8n-node build",
+    "build:watch": "tsc --watch",
+    "dev": "n8n-node dev",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "release": "n8n-node release",
+    "prepublishOnly": "n8n-node prerelease",
+    "test": "node --test test/"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": true,
+    "credentials": [
+      "dist/credentials/WebzzConnectApi.credentials.js",
+      "dist/credentials/WebzzConnectOAuth2Api.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/WebzzConnect/WebzzConnect.node.js",
+      "dist/nodes/WebzzConnectTrigger/WebzzConnectTrigger.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "0.52.3",
+    "eslint": "9.32.0",
+    "prettier": "3.6.2",
+    "release-it": "^21.1.0",
+    "typescript": "5.9.2"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

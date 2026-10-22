@@ -1,0 +1,12 @@
+{
+	"node": "n8n-nodes-webzzconnect.webzzConnect",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Sales", "Communication"],
+	"resources": {
+		"credentialDocumentation": [
+			{ "url": "https://github.com/webzz/n8n-nodes-webzzconnect#credentials" }
+		],
+		"primaryDocumentation": [{ "url": "https://github.com/webzz/n8n-nodes-webzzconnect#readme" }]
+	}
+}
