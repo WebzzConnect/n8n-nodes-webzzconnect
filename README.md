@@ -1,4 +1,4 @@
-# n8n-nodes-webzzconnect
+# @webzzconnect/n8n-nodes-webzzconnect
 
 This is an n8n community node package for [WebzzConnect](https://connect.webzz.cloud), the omnichannel inbox, CRM and chatbot platform for small businesses. It lets you manage contacts, deals, conversations and WhatsApp templates from your n8n workflows, and start workflows instantly when something happens in WebzzConnect.
 
@@ -8,7 +8,7 @@ This is an n8n community node package for [WebzzConnect](https://connect.webzz.c
 
 ## Installation
 
-Follow the [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) and install `n8n-nodes-webzzconnect`.
+Follow the [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) and install `@webzzconnect/n8n-nodes-webzzconnect`.
 
 ## Credentials
 
