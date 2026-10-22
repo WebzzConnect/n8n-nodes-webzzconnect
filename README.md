@@ -87,6 +87,10 @@ The connected user needs access to the data behind each event, otherwise activat
 
 WebzzConnect allows 600 requests per minute per connection, and contact search is limited to 100 requests per minute per account. When a limit is hit the node fails with a rate-limit error that includes the `Retry-After` wait. Use **Retry On Fail** on the node, or a Wait node, in high-volume workflows.
 
+## Example workflows
+
+- [WhatsApp sales chatbot with human handoff](examples/whatsapp-sales-flow.json): a menu of reply buttons, a pricing link button, a demo-slot list, and a handoff to a person. The bot stops as soon as a person replies, and a button tapped at the wrong step does nothing. To use it, copy the file's contents and paste them into the n8n editor, or use **Import from URL** with the file's raw GitHub link. Setup steps are in the sticky note inside the workflow.
+
 ## Compatibility
 
 Tested with n8n 1.x and 2.x (Node.js 22). Requires a WebzzConnect account.

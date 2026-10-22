@@ -1,0 +1,899 @@
+{
+  "name": "WhatsApp sales chatbot with human handoff (WebzzConnect)",
+  "nodes": [
+    {
+      "id": "ba072b25-1961-4cc5-b03a-0c46460dc7c1",
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -40
+      ],
+      "parameters": {
+        "content": "## WhatsApp sales chatbot with human handoff\n\n**Setup**\n1. In WebzzConnect, create an account API key (Settings > API keys) named like a bot, e.g. \"Sales bot\", with the scopes conversations:reply and conversations:resolve.\n2. Add it as a WebzzConnect API credential and select it on every WebzzConnect node.\n3. In **New message**, pick your WhatsApp inbox.\n4. Edit the texts, the pricing link and the demo slots, then activate the workflow.\n\n**How it stops for people**\nAny reply by a person (dashboard or the WhatsApp Business app) labels the conversation `human`, and the bot stays quiet there. Remove the label to hand the chat back to the bot.\n\nUse an API key, not OAuth: messages sent through OAuth show you as the sender and look like a human reply.",
+        "width": 560,
+        "height": 620
+      }
+    },
+    {
+      "id": "603a8202-bf4f-4f0e-ac6f-2622e102bd0c",
+      "name": "New message",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnectTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "events": [
+          "message_created"
+        ],
+        "messageType": "any",
+        "inboxIds": []
+      },
+      "webhookId": "3d074029-8bfc-442a-baa6-3be49eb9b1eb"
+    },
+    {
+      "id": "5038402d-72ef-4f0a-a38c-1acf6d5b75c8",
+      "name": "Event",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a945e00c-95ef-4a41-a74f-307f7c6c605f",
+              "name": "conversation_id",
+              "value": "={{ $json.conversation.id }}",
+              "type": "string"
+            },
+            {
+              "id": "ae147bc4-8a87-4e4e-b509-d1bb77be5063",
+              "name": "payload",
+              "value": "={{ $json.button_payload ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "6d7d7bb7-a766-4c35-9b51-219171c4aa32",
+              "name": "text",
+              "value": "={{ $json.content ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "2d2002a1-9299-4399-b37c-32d3fe1d5038",
+              "name": "step",
+              "value": "={{ $json.conversation.custom_attributes?.bot_step ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "b650f18d-194f-4d1c-bad7-348ad37425fc",
+              "name": "is_human_agent_message",
+              "value": "={{ ['outgoing', 1].includes($json.message_type) && !$json.private && !$json.content_attributes?.automation_rule_id && ($json.sender?.type === 'user' || $json.content_attributes?.external_echo === true) }}",
+              "type": "boolean"
+            },
+            {
+              "id": "f19be6aa-b4b5-44a7-846d-5172f2c38bd3",
+              "name": "is_customer_message",
+              "value": "={{ ['incoming', 0].includes($json.message_type) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "27dd73f4-db3e-4f76-81a7-5e702913076b",
+      "name": "Person replied?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1335eaeb-9e45-4287-b28e-f01d155048ef",
+              "leftValue": "={{ $json.is_human_agent_message }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2ed97878-1f21-4a64-8062-fa3c9dfc5a9a",
+      "name": "Stop bot: label human",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        660,
+        140
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "addLabels",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "labels": "human"
+      }
+    },
+    {
+      "id": "3a25e7f5-98e3-4228-91a4-807844cc4233",
+      "name": "From the customer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e328d388-22c4-4162-b83b-e458a0c69317",
+              "leftValue": "={{ $json.is_customer_message }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a11e93b9-4fb6-4f90-a712-5e85a1bccbed",
+      "name": "Get conversation",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        880,
+        420
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "get",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}"
+      }
+    },
+    {
+      "id": "6b5f0eb1-6e95-4527-99e3-c86209a1a5e0",
+      "name": "Bot in charge?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "72fe02f7-f107-495f-907e-444594fdb4c9",
+              "leftValue": "={{ ($json.labels ?? []).includes('human') || !!$json.meta?.assignee }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "46cb95ba-9d39-437e-a5ef-d9517342e79f",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1320,
+        420
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "63347181-9698-4e84-a16b-9284ff0a007a",
+                    "leftValue": "={{ $('Event').item.json.payload }}",
+                    "rightValue": "menu_pricing",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "id": "488bde92-a155-41da-bb43-aae7a1475fac",
+                    "leftValue": "={{ ['', 'menu', 'done'].includes($('Event').item.json.step) }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pricing"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ea203a70-8d78-4bee-8b88-22b7624d2782",
+                    "leftValue": "={{ $('Event').item.json.payload }}",
+                    "rightValue": "menu_demo",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "id": "ec24631e-be1e-4216-9805-3e4c7f280bdd",
+                    "leftValue": "={{ ['', 'menu', 'done'].includes($('Event').item.json.step) }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "demo"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7ee176b1-4b76-4aee-8528-b55a2d7c7633",
+                    "leftValue": "={{ $('Event').item.json.payload }}",
+                    "rightValue": "slot_",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  },
+                  {
+                    "id": "b42f98ef-40a6-407d-b054-46b964b5ec83",
+                    "leftValue": "={{ $('Event').item.json.step === 'demo_slots' }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "slot"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7d64d312-24e8-4a18-a708-4757820643f8",
+                    "leftValue": "={{ $('Event').item.json.payload }}",
+                    "rightValue": "menu_person",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  },
+                  {
+                    "id": "3a203cd6-0b0e-42eb-a0e3-e116c8d41056",
+                    "leftValue": "={{ $('Event').item.json.text }}",
+                    "rightValue": "agent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  },
+                  {
+                    "id": "2c29a80a-5d0c-4b97-86c9-9d8d09dc2821",
+                    "leftValue": "={{ $('Event').item.json.text }}",
+                    "rightValue": "human",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  },
+                  {
+                    "id": "47638bdb-48e8-44af-8c6a-79ff2d0d121a",
+                    "leftValue": "={{ $('Event').item.json.text }}",
+                    "rightValue": "person",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  },
+                  {
+                    "id": "133669a1-3efc-42e5-a3ae-64ab9414f708",
+                    "leftValue": "={{ $('Event').item.json.text }}",
+                    "rightValue": "representative",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  },
+                  {
+                    "id": "7515a6d5-1f5e-4f5b-be2b-0ecb63683b74",
+                    "leftValue": "={{ $('Event').item.json.text }}",
+                    "rightValue": "talk to",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "person"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "fdde50b0-e323-415c-86b4-f59cd85791f2",
+                    "leftValue": "={{ $('Event').item.json.payload }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "stale"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "menu"
+        }
+      }
+    },
+    {
+      "id": "740dba4b-a28c-47f7-9f30-fd105346699b",
+      "name": "Send pricing link",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        0
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "sendMessage",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "messageType": "cta_url",
+        "content": "Our plans start at $49/month, no commitment. Full details here:",
+        "ctaText": "See pricing",
+        "ctaUrl": "https://example.com/pricing",
+        "interactiveOptions": {
+          "footer": "Reply \"agent\" to talk to a person"
+        }
+      }
+    },
+    {
+      "id": "71d880c8-6e2b-437f-a6d6-b82299bfd396",
+      "name": "Step: done (pricing)",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        0
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "setCustomAttributes",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "customAttributes": {
+          "values": [
+            {
+              "key": "bot_step",
+              "value": "done"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "1b706084-603d-4eb9-acd1-d054e47002df",
+      "name": "Send demo slots",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        180
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "sendMessage",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "messageType": "list",
+        "content": "Great! When works for a 20-minute demo?",
+        "listButton": "Pick a time",
+        "rows": {
+          "values": [
+            {
+              "title": "Tomorrow 10:00",
+              "value": "slot_tomorrow_10",
+              "section": "Tomorrow"
+            },
+            {
+              "title": "Tomorrow 14:00",
+              "value": "slot_tomorrow_14",
+              "section": "Tomorrow"
+            },
+            {
+              "title": "Next week",
+              "value": "slot_next_week",
+              "description": "We will message you to pick a day",
+              "section": "Later"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "73d31cde-6622-42ac-9375-9136b7c3e614",
+      "name": "Step: demo slots",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        180
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "setCustomAttributes",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "customAttributes": {
+          "values": [
+            {
+              "key": "bot_step",
+              "value": "demo_slots"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "178762f2-301f-4755-9f72-73706a65793d",
+      "name": "Confirm demo",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        360
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "sendMessage",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "messageType": "text",
+        "content": "=Booked: {{ $('Event').item.json.text || 'your slot' }}. We will send a calendar invite shortly."
+      }
+    },
+    {
+      "id": "97cac018-2584-4ea5-a784-c5f6c045947c",
+      "name": "Save chosen slot",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        360
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "setCustomAttributes",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "customAttributes": {
+          "values": [
+            {
+              "key": "demo_slot",
+              "value": "={{ $('Event').item.json.payload }}"
+            },
+            {
+              "key": "bot_step",
+              "value": "done"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7fe6c211-0781-461d-8579-4a036152226a",
+      "name": "Tell: a person is coming",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        540
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "sendMessage",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "messageType": "text",
+        "content": "Sure! A team member will reply here shortly."
+      }
+    },
+    {
+      "id": "a5400cd6-3493-4cf2-ab16-92c2403d4507",
+      "name": "Hand over: label human",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        540
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "addLabels",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "labels": "human"
+      }
+    },
+    {
+      "id": "efe3c3ba-9cba-484a-bb9b-69d91f1826da",
+      "name": "Open for agents",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        540
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "updateStatus",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "status": "open"
+      }
+    },
+    {
+      "id": "092e7df1-68ab-4486-832a-8b36555fcdea",
+      "name": "Send menu",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        720
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "sendMessage",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "messageType": "button",
+        "content": "Hi! How can we help?",
+        "buttons": {
+          "values": [
+            {
+              "title": "See pricing",
+              "value": "menu_pricing"
+            },
+            {
+              "title": "Book a demo",
+              "value": "menu_demo"
+            },
+            {
+              "title": "Talk to a person",
+              "value": "menu_person"
+            }
+          ]
+        },
+        "interactiveOptions": {
+          "headerType": "text",
+          "headerText": "Your Company",
+          "footer": "Tap a button"
+        }
+      }
+    },
+    {
+      "id": "3ce056f8-d073-487c-84d6-d97505e771fa",
+      "name": "Step: menu",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        720
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "conversation",
+        "operation": "setCustomAttributes",
+        "conversationId": "={{ $('Event').item.json.conversation_id }}",
+        "customAttributes": {
+          "values": [
+            {
+              "key": "bot_step",
+              "value": "menu"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New message": {
+      "main": [
+        [
+          {
+            "node": "Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event": {
+      "main": [
+        [
+          {
+            "node": "Person replied?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Person replied?": {
+      "main": [
+        [
+          {
+            "node": "Stop bot: label human",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "From the customer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "From the customer?": {
+      "main": [
+        [
+          {
+            "node": "Get conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get conversation": {
+      "main": [
+        [
+          {
+            "node": "Bot in charge?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot in charge?": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Send pricing link",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send demo slots",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirm demo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tell: a person is coming",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [],
+        [
+          {
+            "node": "Send menu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send pricing link": {
+      "main": [
+        [
+          {
+            "node": "Step: done (pricing)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send demo slots": {
+      "main": [
+        [
+          {
+            "node": "Step: demo slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm demo": {
+      "main": [
+        [
+          {
+            "node": "Save chosen slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell: a person is coming": {
+      "main": [
+        [
+          {
+            "node": "Hand over: label human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hand over: label human": {
+      "main": [
+        [
+          {
+            "node": "Open for agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send menu": {
+      "main": [
+        [
+          {
+            "node": "Step: menu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
