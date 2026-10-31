@@ -27,9 +27,13 @@ Create a **WebzzConnect OAuth2 API** credential and click **Connect my account**
 
 Create the key in WebzzConnect → Settings → API keys. To answer customers as a bot, make the key act as a virtual agent (admins only): its role then decides what it can do, and this connection sees only the conversations that agent handles. For reminders, CRM sync and other account-wide flows, use a key that doesn't act as a virtual agent and tick the scopes it needs.
 
-To answer customers as a bot with OAuth, choose Connect as → A virtual agent on the consent screen (admins only, one account). Choose Me to act as yourself.
+To answer customers as a bot, choose Connect as → A virtual agent on the consent screen (admins only, one account). Choose Me to act as yourself.
 
-Add a trigger on the same connection: it keeps the agent listening. With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential. If a credential was revoked while the workflow was active, deactivation still completes and writes "Couldn't remove WebzzConnect webhook subscription {id}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect." to the n8n log; delete the leftover in WebzzConnect → Settings → App webhooks.
+Add a trigger on the same connection: it keeps the agent listening. With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential. If a credential was revoked while the workflow was active, deactivation still completes and writes "Couldn't remove WebzzConnect webhook subscription {id}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks." to the n8n log; delete the leftover in WebzzConnect → Settings → App webhooks.
+
+Replacing a connection: switching a trigger's credential, even to another credential of the same account, leaves the old subscription delivering to the old address until it is deleted. A leftover row of a virtual agent keeps that agent listening. Replacing an all-inboxes key with a one-inbox key makes activation fail with a 422 until the old row is gone. The remedy is the same: an administrator deletes the subscription in WebzzConnect → Settings → App webhooks.
+
+Two agents' flows can hand a conversation back and forth (A hands to B, B hands back to A). Nothing stops that for you: your flow logic must prevent it, for example by recording a hand-off in a custom attribute and not handing the same conversation back.
 
 A conversation the bot holds and the customer leaves quiet gets a nudge after 5 minutes and closes 10 minutes later (auto-closed).
 
@@ -99,7 +103,7 @@ Optionally narrow conversation and message events to some inboxes, and deal even
 
 Activating the workflow registers the n8n webhook address in WebzzConnect; deactivating removes it. If the same address is already registered, its secret is rotated (the registration stays). If the n8n webhook address changes (for example a new host), the next activation replaces the old registration. Every delivery is checked against its HMAC-SHA256 signature (`X-WebzzConnect-Signature`) and rejected if it is older than five minutes. Your n8n webhook address must be reachable from the internet (set `WEBHOOK_URL` for self-hosted n8n).
 
-The connected user needs access to the data behind each event, otherwise activation fails with a message naming the missing permission.
+The connected person or virtual agent needs access to the data behind each event, otherwise activation fails with a message naming the missing permission.
 
 ## Errors you may see
 

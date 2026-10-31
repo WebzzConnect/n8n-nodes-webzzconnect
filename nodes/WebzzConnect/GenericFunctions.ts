@@ -35,6 +35,8 @@ export const authenticationProperty: INodeProperties = {
 export const COPY = {
 	handoffOneTarget:
 		'A virtual agent hands a conversation to one target: a person, another virtual agent, or your team. Choose an agent or a team, not both. Nothing was changed. (handoff_one_target)',
+	connectionKindUnknown:
+		"Couldn't check which kind of connection this is, so nothing was changed. Run again. (connection_kind_unknown)",
 	assignNoTarget:
 		'Choose a person or virtual agent to assign. To remove the assignee, use Unassign. Nothing was changed. (assign_no_target)',
 	contactNotVisible:

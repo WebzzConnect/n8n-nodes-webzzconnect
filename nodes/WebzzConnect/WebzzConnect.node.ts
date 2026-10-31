@@ -201,16 +201,14 @@ async function assignConversation(this: IExecuteFunctions, i: number): Promise<I
 	const teamId = String(this.getNodeParameter('teamId', i, '') ?? '').trim();
 	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
 	if (!assignee && !teamId) {
-		throw new NodeOperationError(this.getNode(), 'Choose an agent, a team, or both', {
-			itemIndex: i,
-		});
+		throw new NodeOperationError(this.getNode(), COPY.assignNoTarget, { itemIndex: i });
 	}
 	if (assignee && teamId) {
 		const { kind } = await getConnectionInfo.call(this);
 		if (!kind) {
 			throw new NodeOperationError(
 				this.getNode(),
-				'Could not tell what this credential acts as, so nothing was changed. Check the API key, or reconnect the OAuth credential.',
+				COPY.connectionKindUnknown,
 				{ itemIndex: i },
 			);
 		}
@@ -220,9 +218,10 @@ async function assignConversation(this: IExecuteFunctions, i: number): Promise<I
 	}
 	let team: IDataObject | undefined;
 	if (teamId) {
-		// A note on a team-only change is sent too: the server refuses it, as the user asked for a hand-off note.
+		// The note rides on the team call too: the server refuses a note on a team change, so the server decides
+		// (team-only, or team + agent from a non-agent connection) and nothing is written before the refusal.
 		const body: IDataObject = { team_id: Number(pathId.call(this, teamId)) };
-		if (note && !assignee) body.handoff_note = note;
+		if (note) body.handoff_note = note;
 		team = asObject(await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body }));
 		if (team.id === undefined) {
 			throw new NodeOperationError(
@@ -257,7 +256,8 @@ async function assignConversation(this: IExecuteFunctions, i: number): Promise<I
 
 /**
  * An explicit null clears the field server-side, so these bodies bypass compact(). The note rides
- * on the agent call only: it is what makes a virtual agent's unassign a hand-off.
+ * on the agent call (what makes a virtual agent's unassign a hand-off), or on the team call when only
+ * the team is removed.
  */
 async function unassignConversation(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
@@ -265,9 +265,10 @@ async function unassignConversation(this: IExecuteFunctions, i: number): Promise
 	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
 	// Separate calls: assignee_id takes precedence over team_id when both are present.
 	if (from === 'team' || from === 'both') {
-		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, {
-			body: { team_id: null },
-		});
+		// Team only: the note goes on the team call, so the server refuses it instead of it being dropped.
+		const body: IDataObject = { team_id: null };
+		if (note && from === 'team') body.handoff_note = note;
+		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body });
 	}
 	if (from === 'agent' || from === 'both') {
 		const body: IDataObject = { assignee_id: null };
@@ -944,8 +945,8 @@ export class WebzzConnect implements INodeType {
 							contact_id: this.getNodeParameter('contactId', i) as string,
 						};
 						if (content) body.message = { content };
-			const status = this.getNodeParameter('initialStatus', i, '') as string;
-			if (status) body.status = status;
+						const status = this.getNodeParameter('initialStatus', i, '') as string;
+						if (status) body.status = status;
 						result = asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
 					} else if (operation === 'sendMessage') {
 						result = await sendConversationMessage.call(this, i);

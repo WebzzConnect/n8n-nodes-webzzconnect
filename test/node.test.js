@@ -295,16 +295,16 @@ test('assign: an empty agent assigns the team only; with no team it is an error'
 	assert.deepEqual(posts(calls), [{ team_id: 3 }]);
 	await assert.rejects(
 		script('conversation', 'assign', { conversationId: '4', agentId: '  ' }, okAssign()),
-		/Choose an agent, a team, or both/,
+		/\(assign_no_target\)/,
 	);
 });
 
-test('assign: the hand-off note is sent only when filled, on the agent call', async () => {
+test('assign: the hand-off note is sent only when filled, on the agent call (and the team call, so a refusal writes nothing)', async () => {
 	const run = (note) =>
 		script('conversation', 'assign', { conversationId: '4', agentId: 'AgentBot:5', teamId: '3', handoffNote: note }, okAssign('account_key'));
 	assert.deepEqual(posts((await run('')).calls), [{ team_id: 3 }, { assignee_id: '5', assignee_type: 'AgentBot' }]);
 	assert.deepEqual(posts((await run('Wants a quote')).calls), [
-		{ team_id: 3 },
+		{ team_id: 3, handoff_note: 'Wants a quote' },
 		{ assignee_id: '5', assignee_type: 'AgentBot', handoff_note: 'Wants a quote' },
 	]);
 	// A team-only change carries the note too, so the server refuses it (it is never silently dropped).
@@ -312,11 +312,19 @@ test('assign: the hand-off note is sent only when filled, on the agent call', as
 	assert.deepEqual(posts(teamOnly.calls), [{ team_id: 3, handoff_note: 'x' }]);
 });
 
+test('unassign: Team only with a note sends the note on the team call; both keeps it on the agent call', async () => {
+	const run = async (unassignFrom) =>
+		posts((await script('conversation', 'unassign', { conversationId: '4', unassignFrom, handoffNote: 'x' }, () => ({ id: 4 }))).calls);
+	assert.deepEqual(await run('team'), [{ team_id: null, handoff_note: 'x' }]);
+	assert.deepEqual(await run('agent'), [{ assignee_id: null, handoff_note: 'x' }]);
+	assert.deepEqual(await run('both'), [{ team_id: null }, { assignee_id: null, handoff_note: 'x' }]);
+});
+
 test('assign: team and agent on a virtual agent connection stop before any write (fail closed)', async () => {
 	const params = { conversationId: '4', agentId: '11', teamId: '3' };
 	for (const [answer, pattern] of [
 		[kindOf('agent'), /Choose an agent or a team, not both.*\(handoff_one_target\)/],
-		[{ account: { id: 7 } }, /Could not tell what this credential acts as/],
+		[{ account: { id: 7 } }, /Couldn't check which kind of connection this is.*\(connection_kind_unknown\)/],
 		[refusal(503, { error: 'down' }), /down/],
 	]) {
 		const methods = [];
@@ -955,7 +963,7 @@ test('delete: a 401 resolves and logs exactly the copy with the id; a 500 throws
 	const revoked = await run(401);
 	assert.equal(await revoked.result, true);
 	assert.deepEqual(revoked.warnings, [[
-		"Couldn't remove WebzzConnect webhook subscription 5: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect.",
+		"Couldn't remove WebzzConnect webhook subscription 5: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks.",
 	]]);
 	assert.deepEqual(revoked.stored, {});
 	const failed = await run(500);

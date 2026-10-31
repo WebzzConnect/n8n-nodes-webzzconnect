@@ -52,7 +52,7 @@ export const conversationOperations: INodeProperties[] = [
 				name: 'Send Message',
 				value: 'sendMessage',
 				description:
-					"Reply in a conversation. For a chatbot flow, use an API key: its messages arrive with sender null, so they never match the trigger's human-reply rule.",
+					'Reply in a conversation. A virtual agent connection can send only into conversations the agent handles.',
 				action: 'Send a message in a conversation',
 			},
 			{
@@ -409,7 +409,7 @@ export const conversationFields: INodeProperties[] = [
 		type: 'string',
 		required: true,
 		default: '',
-		placeholder: 'human, vip',
+		placeholder: 'vip, hot-lead',
 		displayOptions: { show: show(['addLabels']) },
 		description:
 			'Comma-separated labels to add (sent in lowercase). Labels the conversation already has are kept.',

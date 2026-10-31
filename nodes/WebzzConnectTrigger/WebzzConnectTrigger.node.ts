@@ -311,7 +311,7 @@ export class WebzzConnectTrigger implements INodeType {
 						if (status === 401) {
 							// A revoked credential must not block deactivation. Hooks have no toast: log the fixed copy and the id only.
 							this.logger.warn(
-								`Couldn't remove WebzzConnect webhook subscription ${String(stored.id)}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect.`,
+								`Couldn't remove WebzzConnect webhook subscription ${String(stored.id)}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks.`,
 							);
 						} else if (status !== 404) {
 							// 404: already gone, nothing left to clean up on our side.
