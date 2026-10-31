@@ -1,5 +1,5 @@
 {
-  "name": "WhatsApp sales chatbot with human handoff (WebzzConnect)",
+  "name": "WhatsApp sales chatbot with hand-off (WebzzConnect)",
   "nodes": [
     {
       "id": "ba072b25-1961-4cc5-b03a-0c46460dc7c1",
@@ -11,16 +11,16 @@
         -40
       ],
       "parameters": {
-        "content": "## WhatsApp sales chatbot with human handoff\n\n**Setup**\n1. In WebzzConnect, create an account API key (Settings > API keys) named like a bot, e.g. \"Sales bot\", with the scopes conversations:reply and conversations:resolve.\n2. Add it as a WebzzConnect API credential and select it on every WebzzConnect node.\n3. In **New message**, pick your WhatsApp inbox.\n4. Edit the texts, the pricing link and the demo slots, then activate the workflow.\n\n**How it stops for people**\nAny reply by a person (dashboard or the WhatsApp Business app) labels the conversation `human`, and the bot stays quiet there. Remove the label to hand the chat back to the bot.\n\nUse an API key, not OAuth: messages sent through OAuth show you as the sender and look like a human reply.",
+        "content": "## WhatsApp sales chatbot with hand-off\n\nSetup: 1. In WebzzConnect, create a virtual agent and make it answer new conversations in your WhatsApp inbox. 2. Connect it here: an API key that acts as the agent, or OAuth with Connect as → A virtual agent. 3. Keep this workflow active: it keeps the agent listening. The bot answers only conversations it holds. A person who replies in WebzzConnect takes over, and the bot stops. To hand off, the flow assigns with a note.",
         "width": 560,
-        "height": 620
+        "height": 300
       }
     },
     {
       "id": "603a8202-bf4f-4f0e-ac6f-2622e102bd0c",
       "name": "New message",
       "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnectTrigger",
-      "typeVersion": 1,
+      "typeVersion": 1.1,
       "position": [
         0,
         300
@@ -30,10 +30,25 @@
         "events": [
           "message_created"
         ],
-        "messageType": "any",
+        "messageType": "incoming",
         "inboxIds": []
       },
       "webhookId": "3d074029-8bfc-442a-baa6-3be49eb9b1eb"
+    },
+    {
+      "id": "0c8c7a58-3a0b-4a5e-9d0e-5d5a1b7f9a01",
+      "name": "Who am I",
+      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "connection",
+        "operation": "getInfo"
+      }
     },
     {
       "id": "5038402d-72ef-4f0a-a38c-1acf6d5b75c8",
@@ -41,7 +56,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        220,
+        440,
         300
       ],
       "parameters": {
@@ -50,38 +65,26 @@
             {
               "id": "a945e00c-95ef-4a41-a74f-307f7c6c605f",
               "name": "conversation_id",
-              "value": "={{ $json.conversation.id }}",
+              "value": "={{ $('New message').item.json.conversation.id }}",
               "type": "string"
             },
             {
               "id": "ae147bc4-8a87-4e4e-b509-d1bb77be5063",
               "name": "payload",
-              "value": "={{ $json.button_payload ?? '' }}",
+              "value": "={{ $('New message').item.json.button_payload ?? '' }}",
               "type": "string"
             },
             {
               "id": "6d7d7bb7-a766-4c35-9b51-219171c4aa32",
               "name": "text",
-              "value": "={{ $json.content ?? '' }}",
+              "value": "={{ $('New message').item.json.content ?? '' }}",
               "type": "string"
             },
             {
               "id": "2d2002a1-9299-4399-b37c-32d3fe1d5038",
               "name": "step",
-              "value": "={{ $json.conversation.custom_attributes?.bot_step ?? '' }}",
+              "value": "={{ $('New message').item.json.conversation.custom_attributes?.bot_step ?? '' }}",
               "type": "string"
-            },
-            {
-              "id": "b650f18d-194f-4d1c-bad7-348ad37425fc",
-              "name": "is_human_agent_message",
-              "value": "={{ ['outgoing', 1].includes($json.message_type) && !$json.private && !$json.content_attributes?.automation_rule_id && ($json.sender?.type === 'user' || $json.content_attributes?.external_echo === true) }}",
-              "type": "boolean"
-            },
-            {
-              "id": "f19be6aa-b4b5-44a7-846d-5172f2c38bd3",
-              "name": "is_customer_message",
-              "value": "={{ ['incoming', 0].includes($json.message_type) }}",
-              "type": "boolean"
             }
           ]
         },
@@ -89,12 +92,12 @@
       }
     },
     {
-      "id": "27dd73f4-db3e-4f76-81a7-5e702913076b",
-      "name": "Person replied?",
+      "id": "4d1f0c5e-2b7a-4c3e-8a21-6f3d9e0b7c02",
+      "name": "Mine to answer?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        440,
+        660,
         300
       ],
       "parameters": {
@@ -107,113 +110,32 @@
           },
           "conditions": [
             {
-              "id": "1335eaeb-9e45-4287-b28e-f01d155048ef",
-              "leftValue": "={{ $json.is_human_agent_message }}",
+              "id": "c1a1d7a0-1111-4a11-9a11-000000000001",
+              "leftValue": "={{ ['incoming', 0].includes($('New message').item.json.message_type) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
                 "operation": "true",
                 "singleValue": true
               }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "2ed97878-1f21-4a64-8062-fa3c9dfc5a9a",
-      "name": "Stop bot: label human",
-      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
-      "typeVersion": 1,
-      "position": [
-        660,
-        140
-      ],
-      "parameters": {
-        "authentication": "apiKey",
-        "resource": "conversation",
-        "operation": "addLabels",
-        "conversationId": "={{ $('Event').item.json.conversation_id }}",
-        "labels": "human"
-      }
-    },
-    {
-      "id": "3a25e7f5-98e3-4228-91a4-807844cc4233",
-      "name": "From the customer?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        660,
-        420
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": false,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
+            },
             {
-              "id": "e328d388-22c4-4162-b83b-e458a0c69317",
-              "leftValue": "={{ $json.is_customer_message }}",
+              "id": "c1a1d7a0-1111-4a11-9a11-000000000002",
+              "leftValue": "={{ $('New message').item.json.conversation.meta.assignee_type === 'AgentBot' }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
                 "operation": "true",
                 "singleValue": true
               }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "a11e93b9-4fb6-4f90-a712-5e85a1bccbed",
-      "name": "Get conversation",
-      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
-      "typeVersion": 1,
-      "position": [
-        880,
-        420
-      ],
-      "parameters": {
-        "authentication": "apiKey",
-        "resource": "conversation",
-        "operation": "get",
-        "conversationId": "={{ $('Event').item.json.conversation_id }}"
-      }
-    },
-    {
-      "id": "6b5f0eb1-6e95-4527-99e3-c86209a1a5e0",
-      "name": "Bot in charge?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        1100,
-        420
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": false,
-            "leftValue": "",
-            "typeValidation": "loose",
-            "version": 2
-          },
-          "conditions": [
+            },
             {
-              "id": "72fe02f7-f107-495f-907e-444594fdb4c9",
-              "leftValue": "={{ ($json.labels ?? []).includes('human') || !!$json.meta?.assignee }}",
+              "id": "c1a1d7a0-1111-4a11-9a11-000000000003",
+              "leftValue": "={{ $('Who am I').item.json.virtual_agent?.id != null && String($('New message').item.json.conversation.meta.assignee?.id) === String($('Who am I').item.json.virtual_agent.id) }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
-                "operation": "false",
+                "operation": "true",
                 "singleValue": true
               }
             }
@@ -229,8 +151,8 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.2,
       "position": [
-        1320,
-        420
+        880,
+        300
       ],
       "parameters": {
         "rules": {
@@ -367,7 +289,7 @@
                   {
                     "id": "2c29a80a-5d0c-4b97-86c9-9d8d09dc2821",
                     "leftValue": "={{ $('Event').item.json.text }}",
-                    "rightValue": "human",
+                    "rightValue": "person",
                     "operator": {
                       "type": "string",
                       "operation": "contains"
@@ -615,7 +537,7 @@
     },
     {
       "id": "a5400cd6-3493-4cf2-ab16-92c2403d4507",
-      "name": "Hand over: label human",
+      "name": "Hand off to the team",
       "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
       "typeVersion": 1,
       "position": [
@@ -625,26 +547,10 @@
       "parameters": {
         "authentication": "apiKey",
         "resource": "conversation",
-        "operation": "addLabels",
+        "operation": "unassign",
         "conversationId": "={{ $('Event').item.json.conversation_id }}",
-        "labels": "human"
-      }
-    },
-    {
-      "id": "efe3c3ba-9cba-484a-bb9b-69d91f1826da",
-      "name": "Open for agents",
-      "type": "@webzzconnect/n8n-nodes-webzzconnect.webzzConnect",
-      "typeVersion": 1,
-      "position": [
-        2000,
-        540
-      ],
-      "parameters": {
-        "authentication": "apiKey",
-        "resource": "conversation",
-        "operation": "updateStatus",
-        "conversationId": "={{ $('Event').item.json.conversation_id }}",
-        "status": "open"
+        "unassignFrom": "agent",
+        "handoffNote": "The customer asked for a person."
       }
     },
     {
@@ -716,7 +622,7 @@
       "main": [
         [
           {
-            "node": "Event",
+            "node": "Who am I",
             "type": "main",
             "index": 0
           }
@@ -727,58 +633,7 @@
       "main": [
         [
           {
-            "node": "Person replied?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Person replied?": {
-      "main": [
-        [
-          {
-            "node": "Stop bot: label human",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "From the customer?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "From the customer?": {
-      "main": [
-        [
-          {
-            "node": "Get conversation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Get conversation": {
-      "main": [
-        [
-          {
-            "node": "Bot in charge?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Bot in charge?": {
-      "main": [
-        [
-          {
-            "node": "Route",
+            "node": "Mine to answer?",
             "type": "main",
             "index": 0
           }
@@ -862,18 +717,7 @@
       "main": [
         [
           {
-            "node": "Hand over: label human",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Hand over: label human": {
-      "main": [
-        [
-          {
-            "node": "Open for agents",
+            "node": "Hand off to the team",
             "type": "main",
             "index": 0
           }
@@ -885,6 +729,28 @@
         [
           {
             "node": "Step: menu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Who am I": {
+      "main": [
+        [
+          {
+            "node": "Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mine to answer?": {
+      "main": [
+        [
+          {
+            "node": "Route",
             "type": "main",
             "index": 0
           }

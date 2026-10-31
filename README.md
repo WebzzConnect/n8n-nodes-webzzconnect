@@ -23,11 +23,25 @@ The package ships two credentials. Both nodes have an **Authentication** selecto
 
 Create a **WebzzConnect OAuth2 API** credential and click **Connect my account**. It is a public PKCE (S256) client with the client id built in, so there is nothing to paste. Sign in to WebzzConnect if asked and approve the permissions: `contacts:edit`, `deals:edit`, `conversations:reply`, `conversations:assign` and `conversations:resolve` (each edit scope includes the matching read access). The account is taken from the token. If you untick a permission, the matching actions fail with a clear "insufficient scope" message.
 
-**Chatbot flows**
+**Connect as a virtual agent**
 
-Use an API key: messages sent with it arrive with `sender` null and `additional_attributes.sender_name` = the key's name ("Sent by <key name>"), so they never match the human-reply rule. Messages sent through OAuth show the connected user as sender.
+Create the key in WebzzConnect → Settings → API keys. To answer customers as a bot, make the key act as a virtual agent (admins only): its role then decides what it can do, and this connection sees only the conversations that agent handles. For reminders, CRM sync and other account-wide flows, use a key that doesn't act as a virtual agent and tick the scopes it needs.
 
-A human replied when `message_type` is outgoing, `private` is false, `content_attributes.automation_rule_id` is empty, and `sender.type` is "user" or `content_attributes.external_echo` is true (a reply from the WhatsApp Business app). WhatsApp campaign and scheduled template sends arrive with `message_type` "template", so they never match.
+To answer customers as a bot with OAuth, choose Connect as → A virtual agent on the consent screen (admins only, one account). Choose Me to act as yourself.
+
+Add a trigger on the same connection: it keeps the agent listening. With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential. If a credential was revoked while the workflow was active, deactivation still completes and writes "Couldn't remove WebzzConnect webhook subscription {id}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect." to the n8n log; delete the leftover in WebzzConnect → Settings → App webhooks.
+
+A conversation the bot holds and the customer leaves quiet gets a nudge after 5 minutes and closes 10 minutes later (auto-closed).
+
+Use **Connection → Get Info** to see who a credential acts as (`kind`, account, virtual agent, person). It works while the agent is paused.
+
+**Hand off to a person or another agent**
+
+Use Assign (a person or a virtual agent) or Unassign (your team), with a hand-off note. The person is notified and reads the note in the conversation; the customer sees nothing. Labels don't move a conversation: keep them for tagging. A virtual agent hands off to one target: pick a team or an agent, not both.
+
+**Flows on an account key**
+
+A person replied when `message_type` is outgoing, `private` is false, `content_attributes.automation_rule_id` is empty, and `sender.type` is "user" or `content_attributes.external_echo` is true (a reply from the WhatsApp Business app). WhatsApp campaign and scheduled template sends arrive with `message_type` "template", so they never match. An account key's messages arrive with `sender` null.
 
 `button_payload` is customer input: compare it with Equals in a Switch node and keep a fallback; never use it in a Code node, a URL or an ID field.
 
@@ -50,15 +64,18 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Search (query, contact, pipeline, stage, owner, status)
 
 **Conversation**
-- Create (with an optional first message)
+- Create (with an optional first message and an optional Status). With a virtual agent connection, a new conversation is handled by that agent, so the customer's reply comes to your flow. A virtual agent can send only into conversations it handles: for reminders and broadcasts, use an account key or an "as me" connection.
 - Send Message (reply, or add a private note; optionally attach a file by public URL, with the text as a caption). **Message Type** also offers WhatsApp interactive messages: **Reply Buttons** (up to 3), **List** (up to 10 rows with optional descriptions and sections, and a menu label) and **Link Button** (one button that opens a URL), each with an optional header (text, or image / video / document by URL; a list only takes text) and footer. The message text is the body and is required. Each button or row has an ID (the title if left empty) that comes back as `button_payload` when the contact taps it. Interactive messages need a WhatsApp Cloud inbox and the 24-hour window; WebzzConnect checks WhatsApp's limits and answers with a clear message.
 - Set Custom Attributes (key / value pairs, merged into the conversation's existing attributes; needs the conversations view and resolve permissions)
 - Add Labels (comma-separated, sent in lowercase, added to the conversation's existing labels; needs the conversations view and reply permissions)
 - Get
-- Get Many (by status and inbox)
-- Assign (an agent and/or a team; the agent must be a member of the conversation's inbox, and the node fails if the assignment was not applied)
-- Unassign (agent, team, or both)
-- Update Status (Open, Resolved or Snoozed with an optional Snooze Until). Resolved sends the CSAT survey when the inbox has CSAT on. Open through an agent's OAuth connection assigns the conversation to that agent; API keys do not.
+- Get Many (by status, inbox and virtual agent; statuses include With a Virtual Agent, Waiting on Customer and Pending (Both). With a virtual agent connection, Open finds none)
+- Assign (a person or a virtual agent in the conversation's inbox, and/or a team, with an optional hand-off note; an unknown or unavailable one is refused and nothing changes)
+- Unassign (agent, team, or both, with an optional hand-off note)
+- Update Status (Open, Resolved, Snoozed with an optional Snooze Until, or Waiting on Customer). Resolved sends the CSAT survey when the inbox has CSAT on. Open through an "as me" connection of an agent-role user also assigns the conversation to that user.
+
+**Connection**
+- Get Info (who this credential acts as)
 
 **WhatsApp Template**
 - Send: choose a WhatsApp inbox, a contact and an approved template, then fill the fields that appear for the template: header text or media URL, body variables (numbered or named), URL button variables and the copy-code coupon. If the template is set by an expression, fill **Body Variables** in order instead. The message is created in the contact's open conversation, or in a new one.
@@ -73,15 +90,31 @@ List-style operations have **Return All** and **Limit**. Fields that WebzzConnec
 **WebzzConnect Trigger** starts a workflow instantly (no polling). Choose one or more events:
 
 - New Conversation, Conversation Status Changed, Conversation Updated
-- New Message (filter by incoming or outgoing). The output has a top-level `button_payload`: the ID of the tapped reply button or list row, the text (or payload) of a template quick reply, or `null` for typed text, so a Switch node can branch on `{{$json.button_payload}}`.
+- Conversation Handed Off: a virtual agent handed a conversation to a person, another virtual agent or the team. The output has `handoff.from`, `handoff.to` (type agent, person or team; no ID or name for the team), `handoff.note` and `handoff.waiting_message`, each possibly null. It is sent at least once: skip a repeat with the same waiting message ID, when there is one.
+- New Message (filter by direction; new triggers default to Incoming, which keeps a reply bot from answering its own messages and their status updates). The output has a top-level `button_payload`: the ID of the tapped reply button or list row, the text (or payload) of a template quick reply, or `null` for typed text, so a Switch node can branch on `{{$json.button_payload}}`.
 - Contact Created, Contact Updated
 - Deal Created, Deal Updated, Deal Stage Changed, Deal Won, Deal Lost, Deal Deleted
 
 Optionally narrow conversation and message events to some inboxes, and deal events to some pipelines. Leave a picker empty to receive events from all of them. To change the events or the pickers, deactivate and activate the workflow again.
 
-Activating the workflow registers the n8n webhook address in WebzzConnect; deactivating removes it. If the n8n webhook address changes (for example a new host), the next activation replaces the old registration. Every delivery is checked against its HMAC-SHA256 signature (`X-WebzzConnect-Signature`) and rejected if it is older than five minutes. Your n8n webhook address must be reachable from the internet (set `WEBHOOK_URL` for self-hosted n8n).
+Activating the workflow registers the n8n webhook address in WebzzConnect; deactivating removes it. If the same address is already registered, its secret is rotated (the registration stays). If the n8n webhook address changes (for example a new host), the next activation replaces the old registration. Every delivery is checked against its HMAC-SHA256 signature (`X-WebzzConnect-Signature`) and rejected if it is older than five minutes. Your n8n webhook address must be reachable from the internet (set `WEBHOOK_URL` for self-hosted n8n).
 
 The connected user needs access to the data behind each event, otherwise activation fails with a message naming the missing permission.
+
+## Errors you may see
+
+| Code | What it means | What to do |
+|---|---|---|
+| `[409] not_handling` | This virtual agent isn't handling this conversation any more: a person took it, it was handed off, or it's resolved. | Stop the flow for this conversation. |
+| `[403] agent_paused` | The virtual agent is paused, so this connection can't act. | Set the agent live in WebzzConnect, then run again. |
+| `[403]` other | This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. | Check the server message in brackets. |
+| `[422] assignee_not_available` | That person or virtual agent is unknown, removed, or not in the conversation's inbox. | Nothing was changed; pick another. |
+| `[422] conversation_resolved` | A virtual agent can't be assigned to a resolved conversation. | Reopen it first, or assign a person. |
+| `[422] handoff_note_not_allowed` | Only the virtual agent handling the conversation can add a hand-off note, and only when it hands the conversation to someone. | Remove the note, or use a virtual agent connection. |
+| `[422] handoff_note_invalid` | The hand-off note must be 1 to 500 characters. | Shorten it. |
+| `handoff_one_target` | A virtual agent hands off to one target. | Choose an agent or a team, not both. |
+| `assign_no_target` | No person or virtual agent was chosen (or the ID was 0). | Pick one, or use Unassign. |
+| `[422]` on a contact | The contact may exist but this virtual agent sees only the contacts of conversations it handles. | Use an account key or an "as me" connection. |
 
 ## Rate limits
 
@@ -89,7 +122,7 @@ WebzzConnect allows 600 requests per minute per connection, and contact search i
 
 ## Example workflows
 
-- [WhatsApp sales chatbot with human handoff](examples/whatsapp-sales-flow.json): a menu of reply buttons, a pricing link button, a demo-slot list, and a handoff to a person. The bot stops as soon as a person replies, and a button tapped at the wrong step does nothing. To use it, copy the file's contents and paste them into the n8n editor, or use **Import from URL** with the file's raw GitHub link. Setup steps are in the sticky note inside the workflow.
+- [WhatsApp sales chatbot with hand-off](examples/whatsapp-sales-flow.json): a menu of reply buttons, a pricing link button, a demo-slot list, and a hand-off to your team with a note. It answers only conversations its virtual agent holds (it checks Connection → Get Info), and a button tapped at the wrong step does nothing. To use it, copy the file's contents and paste them into the n8n editor, or use **Import from URL** with the file's raw GitHub link. Setup steps are in the sticky note inside the workflow.
 
 ## Compatibility
 
@@ -102,4 +135,4 @@ Tested with n8n 1.x and 2.x (Node.js 22). Requires a WebzzConnect account.
 
 ## Version history
 
-- 0.1.0: first release.
+See [CHANGELOG.md](CHANGELOG.md).

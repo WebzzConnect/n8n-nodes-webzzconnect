@@ -832,3 +832,153 @@ test('ids in request paths: a non-numeric id is refused before any request', asy
 	const ok = await runConversation('get', { conversationId: ' 5 ' }, { id: 5 });
 	assert.deepEqual(summary(ok.calls), [`GET ${C}/5 null`]);
 });
+
+// --- Trigger: virtual agents (Part N2) ---
+
+const { createHmac } = require('crypto');
+
+function webhookContext({ body, parameters, secret = 'sec', signed = true }) {
+	const raw = JSON.stringify(body);
+	const timestamp = String(Math.floor(Date.now() / 1000));
+	const signature = signed
+		? `sha256=${createHmac('sha256', 'sec').update(`${timestamp}.`).update(raw).digest('hex')}`
+		: 'sha256=bad';
+	const sent = [];
+	const ctx = {
+		getNode: () => node,
+		getRequestObject: () => ({ rawBody: Buffer.from(raw) }),
+		getResponseObject: () => ({ status: (code) => ({ json: () => sent.push(code) }) }),
+		getWorkflowStaticData: () => ({ id: 1, secret }),
+		getHeaderData: () => ({ 'x-webzzconnect-signature': signature, 'x-webzzconnect-timestamp': timestamp }),
+		getBodyData: () => body,
+		getNodeParameter: (name, fallback) => (name in parameters ? parameters[name] : fallback),
+		helpers: { returnJsonArray: (data) => [{ json: data }] },
+	};
+	return { ctx, sent };
+}
+
+test('trigger: Direction is any on v1 and incoming on v1.1, declared per @version', () => {
+	const description = new WebzzConnectTrigger().description;
+	assert.deepEqual(description.version, [1, 1.1]);
+	const declarations = description.properties.filter((p) => p.name === 'messageType');
+	const v1 = declarations.find((p) => p.displayOptions.show['@version']);
+	const v11 = declarations.find((p) => p.displayOptions.hide?.['@version']);
+	assert.equal(v1.default, 'any');
+	assert.deepEqual(v1.displayOptions.show['@version'], [1]);
+	assert.equal(v11.default, 'incoming');
+	assert.deepEqual(v11.displayOptions.hide['@version'], [1]);
+	assert.equal(declarations.length, 2);
+});
+
+test('trigger: Incoming drops outgoing message_created and message_updated bodies with no run', async () => {
+	const parameters = { events: ['message_created', 'message_updated'], messageType: 'incoming' };
+	for (const event of ['message_created', 'message_updated']) {
+		for (const message_type of [1, 'outgoing']) {
+			const { ctx } = webhookContext({ body: { event, message_type }, parameters });
+			const result = await new WebzzConnectTrigger().webhook.call(ctx);
+			assert.equal(result.workflowData, undefined, `${event} ${message_type}`);
+		}
+		const { ctx } = webhookContext({ body: { event, message_type: 0 }, parameters });
+		assert.equal((await new WebzzConnectTrigger().webhook.call(ctx)).workflowData[0][0].json.event, event);
+	}
+	const any = webhookContext({ body: { event: 'message_updated', message_type: 1 }, parameters: { ...parameters, messageType: 'any' } });
+	assert.ok((await new WebzzConnectTrigger().webhook.call(any.ctx)).workflowData);
+});
+
+test('trigger: a bad signature is a 401 before any filter', async () => {
+	const { ctx, sent } = webhookContext({
+		body: { event: 'message_created', message_type: 0 },
+		parameters: { events: ['message_created'], messageType: 'incoming' },
+		signed: false,
+	});
+	const result = await new WebzzConnectTrigger().webhook.call(ctx);
+	assert.deepEqual(sent, [401]);
+	assert.equal(result.noWebhookResponse, true);
+	assert.equal(result.workflowData, undefined);
+});
+
+test('trigger: conversation_handed_off is an event, follows the inbox filter and passes through with null fields', async () => {
+	const description = new WebzzConnectTrigger().description;
+	const events = description.properties.find((p) => p.name === 'events');
+	assert.ok(events.options.some((o) => o.value === 'conversation_handed_off' && o.name === 'Conversation Handed Off'));
+	assert.ok(description.properties.find((p) => p.name === 'inboxIds').displayOptions.show.events.includes('conversation_handed_off'));
+	const url = 'https://n8n.example.com/webhook/abc/webhook';
+	const { ctx, calls } = hookContext({
+		stored: {},
+		webhookUrl: url,
+		parameters: { events: ['conversation_handed_off'], inboxIds: ['3'] },
+	});
+	await hooks.create.call(ctx);
+	assert.deepEqual(calls.find((c) => c.method === 'POST').body.inbox_ids, [3]);
+	const body = { event: 'conversation_handed_off', handoff: { from: null, to: { type: 'team', id: null, name: null }, note: null, waiting_message: null } };
+	const delivery = webhookContext({ body, parameters: { events: ['conversation_handed_off'] } });
+	assert.deepEqual((await new WebzzConnectTrigger().webhook.call(delivery.ctx)).workflowData[0][0].json.handoff, body.handoff);
+});
+
+test('create: a re-posted URL (200, no secret) rotates the secret, never deletes, and stores it', async () => {
+	const url = 'https://n8n.example.com/webhook/abc/webhook';
+	const run = async (rotate) => {
+		const stored = {};
+		const { ctx, calls } = hookContext({ stored, webhookUrl: url, parameters: { events: ['message_created'] } });
+		ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+			calls.push({ method: options.method, url: options.url });
+			if (options.url.endsWith('/rotate_secret')) return rotate();
+			return { id: 99, url };
+		};
+		return { stored, calls, result: hooks.create.call(ctx) };
+	};
+	const ok = await run(() => ({ id: 99, secret: 'rotated' }));
+	assert.equal(await ok.result, true);
+	assert.deepEqual(ok.stored, { id: 99, secret: 'rotated' });
+	assert.deepEqual(ok.calls.map((c) => `${c.method} ${c.url.replace(`${BASE}/api/v1/accounts/7`, '')}`), [
+		'POST /webhook_subscriptions',
+		'POST /webhook_subscriptions/99/rotate_secret',
+	]);
+	const failed = await run(() => {
+		throw { httpCode: '500', message: 'boom' };
+	});
+	await assert.rejects(failed.result);
+	assert.deepEqual(failed.stored, {});
+});
+
+test('delete: a 401 resolves and logs exactly the copy with the id; a 500 throws; nothing else is logged', async () => {
+	const run = async (status) => {
+		const stored = { id: 5, secret: 's' };
+		const { ctx } = hookContext({ stored, webhookUrl: 'https://n8n.example.com/x', parameters: {} });
+		const warnings = [];
+		ctx.logger = { warn: (...args) => warnings.push(args) };
+		ctx.helpers.httpRequestWithAuthentication = async () => {
+			throw { httpCode: String(status), message: 'secret-token-leak', response: { status, data: { error: 'x' } } };
+		};
+		return { stored, warnings, result: hooks.delete.call(ctx) };
+	};
+	const revoked = await run(401);
+	assert.equal(await revoked.result, true);
+	assert.deepEqual(revoked.warnings, [[
+		"Couldn't remove WebzzConnect webhook subscription 5: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect.",
+	]]);
+	assert.deepEqual(revoked.stored, {});
+	const failed = await run(500);
+	await assert.rejects(failed.result);
+	assert.deepEqual(failed.warnings, []);
+	assert.equal(await (await run(404)).result, true);
+});
+
+test('example: the sales flow has the virtual agent gate, no human label and no "Person replied?"', () => {
+	const text = require('fs').readFileSync(require('path').join(__dirname, '../examples/whatsapp-sales-flow.json'), 'utf8');
+	const flow = JSON.parse(text);
+	assert.doesNotMatch(text, /human|Person replied\?/);
+	const names = flow.nodes.map((n) => n.name);
+	const info = flow.nodes.find((n) => n.parameters.operation === 'getInfo');
+	assert.equal(info.parameters.resource, 'connection');
+	assert.equal(flow.nodes.find((n) => n.name === 'New message').parameters.messageType, 'incoming');
+	const gate = JSON.stringify(flow.nodes.find((n) => n.name === 'Mine to answer?').parameters);
+	assert.match(gate, /message_type/);
+	assert.match(gate, /assignee_type === 'AgentBot'/);
+	assert.match(gate, /virtual_agent\.id/);
+	assert.ok(names.indexOf('Who am I') < names.indexOf('Mine to answer?'));
+	const handOff = flow.nodes.find((n) => n.name === 'Hand off to the team');
+	assert.equal(handOff.parameters.operation, 'unassign');
+	assert.ok(handOff.parameters.handoffNote);
+	assert.ok(flow.connections['Mine to answer?'] && flow.connections['Who am I']);
+});
