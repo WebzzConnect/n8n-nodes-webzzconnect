@@ -17,14 +17,18 @@ import {
 	whatsAppTemplateFields,
 	whatsAppTemplateOperations,
 } from './descriptions/WhatsAppTemplateDescription';
+import { connectionOperations } from './descriptions/ConnectionDescription';
 import {
+	COPY,
 	asArray,
 	asObject,
 	authenticationProperty,
 	digitsOnly,
 	errorForItem,
+	getConnectionInfo,
 	handleApiError,
 	pairsToObject,
+	parseAssignee,
 	pathId,
 	phonesMatch,
 	readErrorInfo,
@@ -150,6 +154,10 @@ async function createOrUpdateContact(this: IExecuteFunctions, i: number): Promis
 		if (readErrorInfo(error).status === 422) {
 			const retry = await findContact.call(this, email, phone);
 			if (retry) return await update(retry);
+			// A virtual agent sees only the contacts of its own conversations: the match exists but is hidden.
+			if ((await getConnectionInfo.call(this)).kind === 'agent') {
+				throw new NodeOperationError(this.getNode(), COPY.contactNotVisible);
+			}
 		}
 		return handleApiError.call(this, error);
 	}
@@ -172,52 +180,89 @@ async function fetchInboxes(this: Ctx): Promise<IDataObject[]> {
 	return asArray(await wzApiRequest.call(this, 'GET', '/inboxes'));
 }
 
+/** The conversation after a write. A 404 means this connection no longer sees it (a virtual agent that let go): undefined. */
+async function readBack(this: IExecuteFunctions, id: string): Promise<IDataObject | undefined> {
+	try {
+		return asObject(await wzRawRequest.call(this, 'GET', `/conversations/${id}`));
+	} catch (error) {
+		if (readErrorInfo(error).status === 404) return undefined;
+		return handleApiError.call(this, error);
+	}
+}
+
 /**
- * Team first, then agent: a team change clears or auto-picks the agent. The conversation is
- * re-fetched and checked, because an unknown id silently unassigns on the server.
+ * Team first, then agent: a team change clears or auto-picks the agent. A virtual agent hands off to
+ * one target, so both set on an agent connection is refused before any write (the server still
+ * refuses the second write with 409 if this check is bypassed).
  */
 async function assignConversation(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
-	const agentId = String(this.getNodeParameter('agentId', i, '') ?? '');
-	const teamId = String(this.getNodeParameter('teamId', i, '') ?? '');
-	if (!agentId && !teamId) {
+	const assignee = parseAssignee.call(this, this.getNodeParameter('agentId', i, ''));
+	const teamId = String(this.getNodeParameter('teamId', i, '') ?? '').trim();
+	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
+	if (!assignee && !teamId) {
 		throw new NodeOperationError(this.getNode(), 'Choose an agent, a team, or both', {
 			itemIndex: i,
 		});
 	}
+	if (assignee && teamId) {
+		const { kind } = await getConnectionInfo.call(this);
+		if (!kind) {
+			throw new NodeOperationError(
+				this.getNode(),
+				'Could not tell what this credential acts as, so nothing was changed. Check the API key, or reconnect the OAuth credential.',
+				{ itemIndex: i },
+			);
+		}
+		if (kind === 'agent') {
+			throw new NodeOperationError(this.getNode(), COPY.handoffOneTarget, { itemIndex: i });
+		}
+	}
+	let team: IDataObject | undefined;
 	if (teamId) {
-		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, {
-			body: { team_id: Number(teamId) },
-		});
+		// A note on a team-only change is sent too: the server refuses it, as the user asked for a hand-off note.
+		const body: IDataObject = { team_id: Number(pathId.call(this, teamId)) };
+		if (note && !assignee) body.handoff_note = note;
+		team = asObject(await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body }));
+		if (team.id === undefined) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`Team ${teamId} was not assigned. Check that the team exists.`,
+				{ itemIndex: i },
+			);
+		}
 	}
-	if (agentId) {
-		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, {
-			body: { assignee_id: Number(agentId) },
-		});
-	}
-	const conversation = asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
-	const meta = asObject(conversation.meta);
-	if (agentId && String(asObject(meta.assignee).id ?? '') !== agentId) {
-		throw new NodeOperationError(
-			this.getNode(),
-			`Agent ${agentId} was not assigned. Check that the agent exists and is a member of the conversation's inbox.`,
-			{ itemIndex: i },
+	let assigned: IDataObject = {};
+	if (assignee) {
+		const body: IDataObject = { assignee_id: assignee.id, assignee_type: assignee.type };
+		if (note) body.handoff_note = note;
+		assigned = asObject(
+			await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body }),
 		);
 	}
-	if (teamId && String(asObject(meta.team).id ?? '') !== teamId) {
-		throw new NodeOperationError(
-			this.getNode(),
-			`Team ${teamId} was not assigned. Check that the team exists.`,
-			{ itemIndex: i },
-		);
-	}
-	return conversation;
+	const conversation = await readBack.call(this, id);
+	if (conversation) return conversation;
+	return {
+		id: Number(id),
+		...(assignee && {
+			assignee: {
+				id: Number(assignee.id),
+				name: assigned.available_name ?? assigned.name ?? null,
+				type: assignee.type,
+			},
+		}),
+		...(team && { team: { id: team.id, name: team.name ?? null } }),
+	};
 }
 
-/** An explicit null clears the field server-side, so these bodies bypass compact(). */
+/**
+ * An explicit null clears the field server-side, so these bodies bypass compact(). The note rides
+ * on the agent call only: it is what makes a virtual agent's unassign a hand-off.
+ */
 async function unassignConversation(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
 	const from = this.getNodeParameter('unassignFrom', i, 'agent') as string;
+	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
 	// Separate calls: assignee_id takes precedence over team_id when both are present.
 	if (from === 'team' || from === 'both') {
 		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, {
@@ -225,11 +270,11 @@ async function unassignConversation(this: IExecuteFunctions, i: number): Promise
 		});
 	}
 	if (from === 'agent' || from === 'both') {
-		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, {
-			body: { assignee_id: null },
-		});
+		const body: IDataObject = { assignee_id: null };
+		if (note) body.handoff_note = note;
+		await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body });
 	}
-	return asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
+	return (await readBack.call(this, id)) ?? { id: Number(id), assignee: null };
 }
 
 /**
@@ -250,8 +295,15 @@ async function updateConversationStatus(this: IExecuteFunctions, i: number): Pro
 		}
 		body.snoozed_until = Math.floor(millis / 1000);
 	}
-	await wzApiRequest.call(this, 'POST', `/conversations/${id}/toggle_status`, { body });
-	return asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
+	const written = asObject(
+		await wzApiRequest.call(this, 'POST', `/conversations/${id}/toggle_status`, { body }),
+	);
+	return (
+		(await readBack.call(this, id)) ?? {
+			id: Number(id),
+			status: asObject(written.payload).current_status ?? status,
+		}
+	);
 }
 
 const HTTP_URL = /^https?:\/\//i;
@@ -588,19 +640,18 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 	const params = processedParams(template, values, processed);
 	if (Object.keys(params).length > 0) templateParams.processed_params = params;
 
-	return asObject(
-		await wzApiRequest.call(this, 'POST', '/conversations', {
-			body: {
-				inbox_id: inboxId,
-				contact_id: contactId,
-				message: {
-					// WebzzConnect stores `content` as the visible message, so send the rendered text.
-					content: content || template.name,
-					template_params: templateParams,
-				},
-			},
-		}),
-	);
+	const body: IDataObject = {
+		inbox_id: inboxId,
+		contact_id: contactId,
+		message: {
+			// WebzzConnect stores `content` as the visible message, so send the rendered text.
+			content: content || template.name,
+			template_params: templateParams,
+		},
+	};
+	const status = this.getNodeParameter('initialStatus', i, '') as string;
+	if (status) body.status = status;
+	return asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
 }
 
 export class WebzzConnect implements INodeType {
@@ -646,6 +697,7 @@ export class WebzzConnect implements INodeType {
 				],
 				default: 'contact',
 			},
+			...connectionOperations,
 			...contactOperations,
 			...contactFields,
 			...dealOperations,
@@ -734,12 +786,20 @@ export class WebzzConnect implements INodeType {
 			async getAgents(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const inboxId = this.getCurrentNodeParameter('inboxId') as string | undefined;
 				if (!inboxId) return [];
-				const path = `/inboxes/${pathId.call(this, inboxId)}/assignable_agents`;
-				const agents = asArray(await wzApiRequest.call(this, 'GET', path));
-				return agents.map((agent) => ({
-					name: String(agent.available_name ?? agent.name ?? agent.email),
-					value: String(agent.id),
-				}));
+				const agents = asArray(
+					await wzApiRequest.call(this, 'GET', '/assignable_agents', {
+						qs: { 'inbox_ids[]': pathId.call(this, inboxId), include_agent_bots: 1 },
+					}),
+				);
+				// A person keeps the bare id (saved workflows still match); a virtual agent is typed.
+				return agents.map((agent) =>
+					agent.assignee_type === 'AgentBot'
+						? { name: `${String(agent.name)} (virtual agent)`, value: `AgentBot:${String(agent.id)}` }
+						: {
+								name: String(agent.available_name ?? agent.name ?? agent.email),
+								value: String(agent.id),
+							},
+				);
 			},
 
 			async getTeams(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
@@ -779,7 +839,10 @@ export class WebzzConnect implements INodeType {
 			try {
 				let result: IDataObject | IDataObject[] = {};
 
-				if (resource === 'contact') {
+				if (resource === 'connection') {
+					const { kind, account, virtual_agent, user } = await getConnectionInfo.call(this);
+					result = { kind, account, virtual_agent, user };
+				} else if (resource === 'contact') {
 					if (operation === 'create') {
 						const fields = {
 							name: this.getNodeParameter('name', i, '') as string,
@@ -881,6 +944,8 @@ export class WebzzConnect implements INodeType {
 							contact_id: this.getNodeParameter('contactId', i) as string,
 						};
 						if (content) body.message = { content };
+			const status = this.getNodeParameter('initialStatus', i, '') as string;
+			if (status) body.status = status;
 						result = asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
 					} else if (operation === 'sendMessage') {
 						result = await sendConversationMessage.call(this, i);
@@ -905,6 +970,7 @@ export class WebzzConnect implements INodeType {
 							qs: compact({
 								status: (filters.status as string) || 'open',
 								inbox_id: filters.inboxId,
+								agent_id: filters.agentId ? pathId.call(this, filters.agentId) : undefined,
 							}),
 							returnAll,
 							limit,
