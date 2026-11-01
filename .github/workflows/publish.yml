@@ -94,6 +94,8 @@ jobs:
         #   .npmrc here before publishing.
         run: |
           [ -n "$NPM_TOKEN" ] && npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          # A pre-release tag (0.5.0-rc.1) publishes under dist-tag `next`, never `latest`.
+          case "$GITHUB_REF_NAME" in *-*) export NPM_CONFIG_TAG=next ;; esac
           npm run release
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

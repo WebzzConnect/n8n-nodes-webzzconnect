@@ -230,46 +230,224 @@ async function runConversation(operation, parameters, conversation = {}) {
 
 const summary = (calls) => calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.body ?? null)}`);
 
-test('assign: team first, then agent, then re-fetch the conversation', async () => {
-	const conversation = { id: 4, meta: { assignee: { id: 11 }, team: { id: 3, name: 'Sales' } } };
-	const { calls, out } = await runConversation(
-		'assign',
-		{ conversationId: '4', agentId: '11', teamId: '3' },
-		conversation,
+// Scripted run: `handler(method, path, body)` answers each request (path is below the account, token_info is absolute).
+function refusal(status, body) {
+	return { httpCode: String(status), message: `status ${status}`, response: { status, data: body } };
+}
+
+async function script(resource, operation, parameters, handler, authentication = 'oAuth2') {
+	const calls = [];
+	const ctx = execContext({ parameters: { resource, operation, ...parameters }, authentication, calls });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body, qs: options.qs });
+		const path = options.url.replace(`${BASE}/api/v1/accounts/7`, '').replace(BASE, '');
+		const answer = await handler(options.method, path, options.body);
+		if (answer?.httpCode) throw answer;
+		return answer;
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, out: out[0].map((entry) => entry.json) };
+}
+const posts = (calls) => calls.filter((c) => c.method === 'POST').map((c) => c.body);
+const kindOf = (kind) => ({ account: { id: 7 }, kind });
+
+const bot = { id: 5, name: 'Sales bot' };
+const okAssign = (kind = 'account_key', held = { id: 4, meta: { assignee: { id: 11 } } }) => (method, path) => {
+	if (path === '/api/v1/token_info') return kindOf(kind);
+	if (method === 'GET') return held;
+	return path.endsWith('/assignments') ? { id: 3, name: 'Sales' } : {};
+};
+
+test('assign: the picker value decides assignee_id (a string) and assignee_type', async () => {
+	for (const [value, id, type] of [
+		['11', '11', 'User'],
+		[' 5', '5', 'User'],
+		['User:7', '7', 'User'],
+		['AgentBot:5', '5', 'AgentBot'],
+		['AgentBot:05', '05', 'AgentBot'],
+	]) {
+		const { calls } = await script('conversation', 'assign', { conversationId: '4', agentId: value }, okAssign());
+		assert.deepEqual(posts(calls), [{ assignee_id: id, assignee_type: type }]);
+	}
+});
+
+test('assign: zero, fractional and non-numeric agents are refused with no request', async () => {
+	for (const value of ['0', '00', 'AgentBot:0', '5.0', 'AgentBot:x', '5abc', '-1']) {
+		const calls = [];
+		await assert.rejects(
+			script('conversation', 'assign', { conversationId: '4', agentId: value }, (m, p) => {
+				calls.push(p);
+				return {};
+			}),
+			NodeOperationError,
+			value,
+		);
+		assert.equal(calls.length, 0, value);
+	}
+	await assert.rejects(
+		script('conversation', 'assign', { conversationId: '4', agentId: '0' }, () => ({})),
+		/Choose a person or virtual agent to assign.*\(assign_no_target\)/,
 	);
-	assert.deepEqual(summary(calls), [
-		`POST ${C}/4/assignments {"team_id":3}`,
-		`POST ${C}/4/assignments {"assignee_id":11}`,
-		`GET ${C}/4 null`,
+});
+
+test('assign: an empty agent assigns the team only; with no team it is an error', async () => {
+	const { calls } = await script('conversation', 'assign', { conversationId: '4', agentId: '', teamId: '3' }, okAssign());
+	assert.deepEqual(posts(calls), [{ team_id: 3 }]);
+	await assert.rejects(
+		script('conversation', 'assign', { conversationId: '4', agentId: '  ' }, okAssign()),
+		/\(assign_no_target\)/,
+	);
+});
+
+test('assign: the hand-off note is sent only when filled, on the agent call (and the team call, so a refusal writes nothing)', async () => {
+	const run = (note) =>
+		script('conversation', 'assign', { conversationId: '4', agentId: 'AgentBot:5', teamId: '3', handoffNote: note }, okAssign('account_key'));
+	assert.deepEqual(posts((await run('')).calls), [{ team_id: 3 }, { assignee_id: '5', assignee_type: 'AgentBot' }]);
+	assert.deepEqual(posts((await run('Wants a quote')).calls), [
+		{ team_id: 3, handoff_note: 'Wants a quote' },
+		{ assignee_id: '5', assignee_type: 'AgentBot', handoff_note: 'Wants a quote' },
 	]);
-	assert.equal(out[0][0].json.meta.team.name, 'Sales');
+	// A team-only change carries the note too, so the server refuses it (it is never silently dropped).
+	const teamOnly = await script('conversation', 'assign', { conversationId: '4', teamId: '3', handoffNote: 'x' }, okAssign());
+	assert.deepEqual(posts(teamOnly.calls), [{ team_id: 3, handoff_note: 'x' }]);
 });
 
-test('assign: agent only and team only send a single assignment', async () => {
-	const agent = await runConversation('assign', { conversationId: '4', agentId: '11' }, { meta: { assignee: { id: 11 } } });
-	assert.deepEqual(summary(agent.calls).slice(0, 1), [`POST ${C}/4/assignments {"assignee_id":11}`]);
-	assert.equal(agent.calls.length, 2);
-	const team = await runConversation('assign', { conversationId: '4', teamId: '3' }, { meta: { team: { id: 3 } } });
-	assert.deepEqual(summary(team.calls).slice(0, 1), [`POST ${C}/4/assignments {"team_id":3}`]);
-	assert.equal(team.calls.length, 2);
+test('unassign: Team only with a note sends the note on the team call; both keeps it on the agent call', async () => {
+	const run = async (unassignFrom) =>
+		posts((await script('conversation', 'unassign', { conversationId: '4', unassignFrom, handoffNote: 'x' }, () => ({ id: 4 }))).calls);
+	assert.deepEqual(await run('team'), [{ team_id: null, handoff_note: 'x' }]);
+	assert.deepEqual(await run('agent'), [{ assignee_id: null, handoff_note: 'x' }]);
+	assert.deepEqual(await run('both'), [{ team_id: null }, { assignee_id: null, handoff_note: 'x' }]);
 });
 
-test('assign: neither agent nor team is an error', async () => {
-	await assert.rejects(runConversation('assign', { conversationId: '4' }), /Choose an agent, a team, or both/);
+test('assign: team and agent on a virtual agent connection stop before any write (fail closed)', async () => {
+	const params = { conversationId: '4', agentId: '11', teamId: '3' };
+	for (const [answer, pattern] of [
+		[kindOf('agent'), /Choose an agent or a team, not both.*\(handoff_one_target\)/],
+		[{ account: { id: 7 } }, /Couldn't check which kind of connection this is.*\(connection_kind_unknown\)/],
+		[refusal(503, { error: 'down' }), /down/],
+	]) {
+		const methods = [];
+		await assert.rejects(
+			script('conversation', 'assign', params, (method) => {
+				methods.push(method);
+				return answer;
+			}),
+			pattern,
+		);
+		assert.deepEqual(methods, ['GET']);
+	}
 });
 
-test('assign: an unknown agent or team (server unassigned silently) is an error', async () => {
+test('assign: person and account connections keep team first, then the person', async () => {
+	for (const kind of ['oauth', 'account_key']) {
+		const { calls, out } = await script('conversation', 'assign', { conversationId: '4', agentId: '11', teamId: '3' }, okAssign(kind));
+		assert.deepEqual(posts(calls), [{ team_id: 3 }, { assignee_id: '11', assignee_type: 'User' }]);
+		assert.equal(out[0].id, 4);
+	}
+});
+
+test('assign: a team POST that answers null is an error', async () => {
 	await assert.rejects(
-		runConversation('assign', { conversationId: '4', agentId: '99' }, { meta: {} }),
-		/Agent 99 was not assigned/,
-	);
-	await assert.rejects(
-		runConversation('assign', { conversationId: '4', teamId: '99' }, { meta: { assignee: null } }),
+		script('conversation', 'assign', { conversationId: '4', teamId: '99' }, (m, p) => (p.endsWith('/assignments') ? null : {})),
 		/Team 99 was not assigned/,
 	);
 });
 
-test('loadOptions: getAgents uses the inbox assignable_agents, getTeams uses /teams', async () => {
+test('write outcomes: a read-back 404 is a success built from the write responses; a write 404 is an error', async () => {
+	const gone = (m, p) => {
+		if (p === '/api/v1/token_info') return kindOf('agent');
+		if (m === 'GET') return refusal(404, { error: 'Resource could not be found' });
+		if (p.endsWith('/assignments')) return { id: 11, available_name: 'Maya', name: 'Maya K', ...(m ? {} : {}) };
+		if (p.endsWith('/toggle_status')) return { payload: { current_status: 'resolved' } };
+		return {};
+	};
+	const assigned = await script('conversation', 'assign', { conversationId: '4', agentId: '11' }, gone);
+	assert.deepEqual(assigned.out, [{ id: 4, assignee: { id: 11, name: 'Maya', type: 'User' } }]);
+	const unassigned = await script('conversation', 'unassign', { conversationId: '4', unassignFrom: 'agent', handoffNote: 'why' }, gone);
+	assert.deepEqual(unassigned.out, [{ id: 4, assignee: null }]);
+	assert.deepEqual(posts(unassigned.calls), [{ assignee_id: null, handoff_note: 'why' }]);
+	const resolved = await script('conversation', 'updateStatus', { conversationId: '4', status: 'resolved' }, gone);
+	assert.deepEqual(resolved.out, [{ id: 4, status: 'resolved' }]);
+
+	for (const [operation, parameters] of [
+		['assign', { agentId: '11' }],
+		['unassign', { unassignFrom: 'agent' }],
+		['updateStatus', { status: 'resolved' }],
+	]) {
+		await assert.rejects(
+			script('conversation', operation, { conversationId: '4', ...parameters }, (m) =>
+				m === 'POST' ? refusal(404, { error: 'not found' }) : {},
+			),
+			NodeApiError,
+			operation,
+		);
+	}
+	await assert.rejects(
+		script('conversation', 'get', { conversationId: '4' }, (m, p) => (p.startsWith('/conv') ? refusal(500, {}) : {})),
+		NodeApiError,
+	);
+});
+
+test('errors: each mapped code shows its copy with [status] and (code); others keep the server message', async () => {
+	const cases = [
+		[403, { error: 'agent_paused', message: 'Hebrew text' }, /^\[403\] The virtual agent is paused.*\(agent_paused\)$/],
+		[409, { error: 'not_handling', error_code: 'not_handling' }, /^\[409\] This virtual agent isn't handling.*\(not_handling\)$/],
+		[422, { error_code: 'assignee_not_available', message: 'Alice Smith is gone' }, /^\[422\] That person or virtual agent can't take.*\(assignee_not_available\)$/],
+		[422, { error_code: 'conversation_resolved' }, /^\[422\] A virtual agent can't be assigned to a resolved.*\(conversation_resolved\)$/],
+		[422, { error_code: 'handoff_note_not_allowed' }, /^\[422\] Only the virtual agent handling.*\(handoff_note_not_allowed\)$/],
+		[422, { error_code: 'handoff_note_invalid' }, /^\[422\] The hand-off note must be 1 to 500.*\(handoff_note_invalid\)$/],
+		[403, { error: 'insufficient_scope', message: 'Needs deals:edit' }, /^\[403\] This connection isn't allowed.*\(Needs deals:edit\)$/],
+		[422, { error_code: 'something_else', message: 'Server says no' }, /^Server says no$/],
+		[409, { error: 'other', message: 'Server conflict' }, /^Server conflict$/],
+	];
+	for (const [status, body, pattern] of cases) {
+		const calls = [];
+		await assert.rejects(
+			script('conversation', 'get', { conversationId: '4' }, (m, p) => {
+				calls.push(p);
+				return refusal(status, body);
+			}),
+			(error) => {
+				assert.match(error.message, pattern);
+				assert.doesNotMatch(error.message, /Alice Smith|Hebrew text/);
+				return true;
+			},
+		);
+		assert.equal(calls.length, 1);
+	}
+});
+
+test('connection: Get Info returns exactly kind, account, virtual_agent and user', async () => {
+	const info = { kind: 'agent', account: { id: 7, name: 'Acme' }, user: null, virtual_agent: { id: 5, name: 'Sales bot', status: 'paused' }, scopes: ['x'], expires_at: null };
+	const { out, calls } = await script('connection', 'getInfo', {}, () => info);
+	assert.deepEqual(out, [{ kind: 'agent', account: info.account, virtual_agent: info.virtual_agent, user: null }]);
+	assert.equal(calls.length, 1);
+});
+
+test('two nodes of one execution with different accounts each use their own account path (token_info is per context)', async () => {
+	const urls = [];
+	const make = (accountId) => {
+		const ctx = execContext({ parameters: { resource: 'conversation', operation: 'get', conversationId: '4' }, authentication: 'apiKey', calls: [] });
+		ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+			urls.push(options.url);
+			return options.url.endsWith('/token_info') ? { account: { id: accountId }, kind: 'account_key' } : {};
+		};
+		return ctx;
+	};
+	const [first, second] = [make(100), make(200)];
+	await new WebzzConnect().execute.call(first);
+	await new WebzzConnect().execute.call(second);
+	await new WebzzConnect().execute.call(first);
+	assert.deepEqual(urls.filter((u) => !u.endsWith('/token_info')), [
+		`${BASE}/api/v1/accounts/100/conversations/4`,
+		`${BASE}/api/v1/accounts/200/conversations/4`,
+		`${BASE}/api/v1/accounts/100/conversations/4`,
+	]);
+	assert.equal(urls.filter((u) => u.endsWith('/token_info')).length, 2);
+});
+
+test('loadOptions: getAgents lists people and typed virtual agents, getTeams uses /teams', async () => {
 	const calls = [];
 	const ctx = {
 		...execContext({ parameters: {}, calls }),
@@ -277,15 +455,26 @@ test('loadOptions: getAgents uses the inbox assignable_agents, getTeams uses /te
 		getCurrentNodeParameter: () => '5',
 	};
 	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
-		calls.push({ method: options.method, url: options.url });
+		calls.push({ url: options.url, qs: options.qs });
 		return options.url.endsWith('/teams')
 			? [{ id: 3, name: 'Sales' }]
-			: { payload: [{ id: 11, available_name: 'Dana' }] };
+			: {
+					payload: [
+						{ id: 11, available_name: 'Dana', assignee_type: 'User' },
+						{ id: 5, name: 'Sales bot', assignee_type: 'AgentBot' },
+					],
+				};
 	};
 	const methods = new WebzzConnect().methods.loadOptions;
-	assert.deepEqual(await methods.getAgents.call(ctx), [{ name: 'Dana', value: '11' }]);
+	assert.deepEqual(await methods.getAgents.call(ctx), [
+		{ name: 'Dana', value: '11' },
+		{ name: 'Sales bot (virtual agent)', value: 'AgentBot:5' },
+	]);
 	assert.deepEqual(await methods.getTeams.call(ctx), [{ name: 'Sales', value: '3' }]);
-	assert.deepEqual(calls.map((c) => c.url), [`${BASE}/api/v1/accounts/7/inboxes/5/assignable_agents`, `${BASE}/api/v1/accounts/7/teams`]);
+	assert.deepEqual(calls[0], {
+		url: `${BASE}/api/v1/accounts/7/assignable_agents`,
+		qs: { 'inbox_ids[]': '5', include_agent_bots: 1 },
+	});
 	ctx.getCurrentNodeParameter = () => '';
 	assert.deepEqual(await methods.getAgents.call(ctx), []);
 });
@@ -302,14 +491,45 @@ test('unassign: sends explicit nulls, team before agent, then re-fetches', async
 	]);
 });
 
-test('updateStatus: status is always sent, then the conversation is re-fetched', async () => {
-	for (const status of ['open', 'resolved']) {
+test('updateStatus: status is always sent, Waiting on Customer is pending, then the conversation is re-fetched', async () => {
+	for (const status of ['open', 'resolved', 'pending']) {
 		const { calls } = await runConversation('updateStatus', { conversationId: '4', status }, { id: 4 });
 		assert.deepEqual(summary(calls), [
 			`POST ${C}/4/toggle_status ${JSON.stringify({ status })}`,
 			`GET ${C}/4 null`,
 		]);
 	}
+});
+
+test('getAll: the new statuses and the virtual agent filter are sent, the default stays open', async () => {
+	const run = async (filters) =>
+		(await script('conversation', 'getAll', { returnAll: false, limit: 5, filters }, () => ({ data: { payload: [] } }))).calls[0].qs;
+	assert.deepEqual(await run({}), { status: 'open', page: 1 });
+	assert.deepEqual(await run({ status: 'with_virtual_agent', agentId: '5' }), { status: 'with_virtual_agent', agent_id: '5', page: 1 });
+	assert.equal((await run({ status: 'waiting_on_customer' })).status, 'waiting_on_customer');
+	await assert.rejects(run({ agentId: 'AgentBot:5' }), NodeOperationError);
+});
+
+test('create and template send: status is sent only when filled', async () => {
+	const inbox = { id: 3, message_templates: [{ name: 'hello', language: 'en', category: 'UTILITY', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hi' }] }] };
+	const handler = (m, p) => (p === '/inboxes' ? [inbox] : {});
+	const run = async (resource, operation, extra) =>
+		posts((await script(resource, operation, { inboxId: '3', contactId: '9', template: 'hello::en', ...extra }, handler)).calls).pop();
+	assert.equal('status' in (await run('conversation', 'create', { initialStatus: '' })), false);
+	assert.equal((await run('conversation', 'create', { initialStatus: 'resolved' })).status, 'resolved');
+	assert.equal('status' in (await run('whatsAppTemplate', 'send', { initialStatus: '' })), false);
+	assert.equal((await run('whatsAppTemplate', 'send', { initialStatus: 'resolved' })).status, 'resolved');
+});
+
+test('contact upsert: a 422 miss says contact_not_visible only on a virtual agent connection', async () => {
+	const run = (kind) =>
+		script('contact', 'createOrUpdate', { email: 'a@b.co', name: 'A' }, (m, p) => {
+			if (p === '/api/v1/token_info') return kindOf(kind);
+			if (m === 'POST') return refusal(422, { error_code: 'invalid', message: 'Email taken' });
+			return { payload: [] };
+		});
+	await assert.rejects(run('agent'), /\[422\] This contact may already exist, but this virtual agent sees only/);
+	await assert.rejects(run('account_key'), /Email taken/);
 });
 
 test('updateStatus: snoozed_until is Unix seconds, and omitted when empty or not snoozed', async () => {
@@ -619,4 +839,154 @@ test('ids in request paths: a non-numeric id is refused before any request', asy
 	assert.equal(calls.length, 0);
 	const ok = await runConversation('get', { conversationId: ' 5 ' }, { id: 5 });
 	assert.deepEqual(summary(ok.calls), [`GET ${C}/5 null`]);
+});
+
+// --- Trigger: virtual agents (Part N2) ---
+
+const { createHmac } = require('crypto');
+
+function webhookContext({ body, parameters, secret = 'sec', signed = true }) {
+	const raw = JSON.stringify(body);
+	const timestamp = String(Math.floor(Date.now() / 1000));
+	const signature = signed
+		? `sha256=${createHmac('sha256', 'sec').update(`${timestamp}.`).update(raw).digest('hex')}`
+		: 'sha256=bad';
+	const sent = [];
+	const ctx = {
+		getNode: () => node,
+		getRequestObject: () => ({ rawBody: Buffer.from(raw) }),
+		getResponseObject: () => ({ status: (code) => ({ json: () => sent.push(code) }) }),
+		getWorkflowStaticData: () => ({ id: 1, secret }),
+		getHeaderData: () => ({ 'x-webzzconnect-signature': signature, 'x-webzzconnect-timestamp': timestamp }),
+		getBodyData: () => body,
+		getNodeParameter: (name, fallback) => (name in parameters ? parameters[name] : fallback),
+		helpers: { returnJsonArray: (data) => [{ json: data }] },
+	};
+	return { ctx, sent };
+}
+
+test('trigger: Direction is any on v1 and incoming on v1.1, declared per @version', () => {
+	const description = new WebzzConnectTrigger().description;
+	assert.deepEqual(description.version, [1, 1.1]);
+	const declarations = description.properties.filter((p) => p.name === 'messageType');
+	const v1 = declarations.find((p) => p.displayOptions.show['@version']);
+	const v11 = declarations.find((p) => p.displayOptions.hide?.['@version']);
+	assert.equal(v1.default, 'any');
+	assert.deepEqual(v1.displayOptions.show['@version'], [1]);
+	assert.equal(v11.default, 'incoming');
+	assert.deepEqual(v11.displayOptions.hide['@version'], [1]);
+	assert.equal(declarations.length, 2);
+});
+
+test('trigger: Incoming drops outgoing message_created and message_updated bodies with no run', async () => {
+	const parameters = { events: ['message_created', 'message_updated'], messageType: 'incoming' };
+	for (const event of ['message_created', 'message_updated']) {
+		for (const message_type of [1, 'outgoing']) {
+			const { ctx } = webhookContext({ body: { event, message_type }, parameters });
+			const result = await new WebzzConnectTrigger().webhook.call(ctx);
+			assert.equal(result.workflowData, undefined, `${event} ${message_type}`);
+		}
+		const { ctx } = webhookContext({ body: { event, message_type: 0 }, parameters });
+		assert.equal((await new WebzzConnectTrigger().webhook.call(ctx)).workflowData[0][0].json.event, event);
+	}
+	const any = webhookContext({ body: { event: 'message_updated', message_type: 1 }, parameters: { ...parameters, messageType: 'any' } });
+	assert.ok((await new WebzzConnectTrigger().webhook.call(any.ctx)).workflowData);
+});
+
+test('trigger: a bad signature is a 401 before any filter', async () => {
+	const { ctx, sent } = webhookContext({
+		body: { event: 'message_created', message_type: 0 },
+		parameters: { events: ['message_created'], messageType: 'incoming' },
+		signed: false,
+	});
+	const result = await new WebzzConnectTrigger().webhook.call(ctx);
+	assert.deepEqual(sent, [401]);
+	assert.equal(result.noWebhookResponse, true);
+	assert.equal(result.workflowData, undefined);
+});
+
+test('trigger: conversation_handed_off is an event, follows the inbox filter and passes through with null fields', async () => {
+	const description = new WebzzConnectTrigger().description;
+	const events = description.properties.find((p) => p.name === 'events');
+	assert.ok(events.options.some((o) => o.value === 'conversation_handed_off' && o.name === 'Conversation Handed Off'));
+	assert.ok(description.properties.find((p) => p.name === 'inboxIds').displayOptions.show.events.includes('conversation_handed_off'));
+	const url = 'https://n8n.example.com/webhook/abc/webhook';
+	const { ctx, calls } = hookContext({
+		stored: {},
+		webhookUrl: url,
+		parameters: { events: ['conversation_handed_off'], inboxIds: ['3'] },
+	});
+	await hooks.create.call(ctx);
+	assert.deepEqual(calls.find((c) => c.method === 'POST').body.inbox_ids, [3]);
+	const body = { event: 'conversation_handed_off', handoff: { from: null, to: { type: 'team', id: null, name: null }, note: null, waiting_message: null } };
+	const delivery = webhookContext({ body, parameters: { events: ['conversation_handed_off'] } });
+	assert.deepEqual((await new WebzzConnectTrigger().webhook.call(delivery.ctx)).workflowData[0][0].json.handoff, body.handoff);
+});
+
+test('create: a re-posted URL (200, no secret) rotates the secret, never deletes, and stores it', async () => {
+	const url = 'https://n8n.example.com/webhook/abc/webhook';
+	const run = async (rotate) => {
+		const stored = {};
+		const { ctx, calls } = hookContext({ stored, webhookUrl: url, parameters: { events: ['message_created'] } });
+		ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+			calls.push({ method: options.method, url: options.url });
+			if (options.url.endsWith('/rotate_secret')) return rotate();
+			return { id: 99, url };
+		};
+		return { stored, calls, result: hooks.create.call(ctx) };
+	};
+	const ok = await run(() => ({ id: 99, secret: 'rotated' }));
+	assert.equal(await ok.result, true);
+	assert.deepEqual(ok.stored, { id: 99, secret: 'rotated' });
+	assert.deepEqual(ok.calls.map((c) => `${c.method} ${c.url.replace(`${BASE}/api/v1/accounts/7`, '')}`), [
+		'POST /webhook_subscriptions',
+		'POST /webhook_subscriptions/99/rotate_secret',
+	]);
+	const failed = await run(() => {
+		throw { httpCode: '500', message: 'boom' };
+	});
+	await assert.rejects(failed.result);
+	assert.deepEqual(failed.stored, {});
+});
+
+test('delete: a 401 resolves and logs exactly the copy with the id; a 500 throws; nothing else is logged', async () => {
+	const run = async (status) => {
+		const stored = { id: 5, secret: 's' };
+		const { ctx } = hookContext({ stored, webhookUrl: 'https://n8n.example.com/x', parameters: {} });
+		const warnings = [];
+		ctx.logger = { warn: (...args) => warnings.push(args) };
+		ctx.helpers.httpRequestWithAuthentication = async () => {
+			throw { httpCode: String(status), message: 'secret-token-leak', response: { status, data: { error: 'x' } } };
+		};
+		return { stored, warnings, result: hooks.delete.call(ctx) };
+	};
+	const revoked = await run(401);
+	assert.equal(await revoked.result, true);
+	assert.deepEqual(revoked.warnings, [[
+		"Couldn't remove WebzzConnect webhook subscription 5: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks.",
+	]]);
+	assert.deepEqual(revoked.stored, {});
+	const failed = await run(500);
+	await assert.rejects(failed.result);
+	assert.deepEqual(failed.warnings, []);
+	assert.equal(await (await run(404)).result, true);
+});
+
+test('example: the sales flow has the virtual agent gate, no human label and no "Person replied?"', () => {
+	const text = require('fs').readFileSync(require('path').join(__dirname, '../examples/whatsapp-sales-flow.json'), 'utf8');
+	const flow = JSON.parse(text);
+	assert.doesNotMatch(text, /human|Person replied\?/);
+	const names = flow.nodes.map((n) => n.name);
+	const info = flow.nodes.find((n) => n.parameters.operation === 'getInfo');
+	assert.equal(info.parameters.resource, 'connection');
+	assert.equal(flow.nodes.find((n) => n.name === 'New message').parameters.messageType, 'incoming');
+	const gate = JSON.stringify(flow.nodes.find((n) => n.name === 'Mine to answer?').parameters);
+	assert.match(gate, /message_type/);
+	assert.match(gate, /assignee_type === 'AgentBot'/);
+	assert.match(gate, /virtual_agent\.id/);
+	assert.ok(names.indexOf('Who am I') < names.indexOf('Mine to answer?'));
+	const handOff = flow.nodes.find((n) => n.name === 'Hand off to the team');
+	assert.equal(handOff.parameters.operation, 'unassign');
+	assert.ok(handOff.parameters.handoffNote);
+	assert.ok(flow.connections['Mine to answer?'] && flow.connections['Who am I']);
 });

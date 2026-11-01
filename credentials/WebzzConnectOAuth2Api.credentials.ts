@@ -30,6 +30,13 @@ export class WebzzConnectOAuth2Api implements ICredentialType {
 			default: '',
 		},
 		{
+			displayName:
+				'To answer customers as a bot, choose Connect as → A virtual agent on the consent screen (admins only, one account). Choose Me to act as yourself.',
+			name: 'agentNotice',
+			type: 'notice',
+			default: '',
+		},
+		{
 			displayName: 'Grant Type',
 			name: 'grantType',
 			type: 'hidden',

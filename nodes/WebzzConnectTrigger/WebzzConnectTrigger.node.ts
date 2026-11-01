@@ -26,6 +26,7 @@ import {
 
 const INBOX_EVENTS = [
 	'conversation_created',
+	'conversation_handed_off',
 	'conversation_status_changed',
 	'conversation_updated',
 	'message_created',
@@ -38,6 +39,9 @@ const DEAL_EVENTS = [
 	'deal_updated',
 	'deal_won',
 ];
+
+const DIRECTION_HELP =
+	'Applies to new and updated messages. Keep Incoming for a reply bot: your virtual agent\'s own replies and their status updates also arrive here, and answering them makes the bot talk to itself.';
 
 /** Deliveries older (or newer) than this many seconds are rejected as replays. */
 const MAX_SKEW_SECONDS = 5 * 60;
@@ -80,7 +84,7 @@ export class WebzzConnectTrigger implements INodeType {
 		name: 'webzzConnectTrigger',
 		icon: { light: 'file:webzzconnect.svg', dark: 'file:webzzconnect.dark.svg' },
 		group: ['trigger'],
-		version: [1],
+		version: [1, 1.1],
 		subtitle: '={{$parameter["events"].join(", ")}}',
 		description: 'Starts a workflow instantly when something happens in WebzzConnect',
 		defaults: { name: 'WebzzConnect Trigger' },
@@ -110,6 +114,13 @@ export class WebzzConnectTrigger implements INodeType {
 		properties: [
 			authenticationProperty,
 			{
+				displayName:
+					'With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential.',
+				name: 'listeningNotice',
+				type: 'notice',
+				default: '',
+			},
+			{
 				displayName: 'Events',
 				name: 'events',
 				type: 'multiOptions',
@@ -118,6 +129,12 @@ export class WebzzConnectTrigger implements INodeType {
 				options: [
 					{ name: 'Contact Created', value: 'contact_created' },
 					{ name: 'Contact Updated', value: 'contact_updated' },
+					{
+						name: 'Conversation Handed Off',
+						value: 'conversation_handed_off',
+						description:
+							'A virtual agent handed a conversation to a person, another virtual agent or the team. Includes who handed it off (handoff.from), to whom (handoff.to, type agent, person or team), the note (handoff.note) and the customer\'s message still waiting for an answer (handoff.waiting_message). Sent at least once: skip a repeat with the same waiting message ID, when there is one. For the team, handoff.to has no ID or name.',
+					},
 					{ name: 'Conversation Status Changed', value: 'conversation_status_changed' },
 					{ name: 'Conversation Updated', value: 'conversation_updated' },
 					{ name: 'Deal Created', value: 'deal_created' },
@@ -131,24 +148,37 @@ export class WebzzConnectTrigger implements INodeType {
 						name: 'New Message',
 						value: 'message_created',
 						description:
-							'A tap on a reply button or list row arrives with its ID in button_payload, a template quick reply with its text or payload. Null for typed text. Your flow\'s own messages sent with an API key arrive with sender null and additional_attributes.sender_name = the key\'s name. A human replied when message_type is outgoing, private is false, content_attributes.automation_rule_id is empty, and sender.type is "user" or content_attributes.external_echo is true (a reply from the WhatsApp Business app). WhatsApp campaign and scheduled template sends arrive with message_type "template", so they never match. button_payload is customer input: compare it with Equals in a Switch and keep a fallback; never use it in a Code node, a URL or an ID field.',
+							'With a virtual agent connection you receive only the conversations the agent handles. When a person replies from the dashboard or app, they take the conversation over and its events stop. To see who handles a conversation, read its assignee and assignee type. A tap on a reply button or list row arrives with its ID in button_payload; compare it with Equals and keep a fallback, never use it in a Code node, a URL or an ID field. Flows on an account key: a person replied when message_type is outgoing, private is false, content_attributes.automation_rule_id is empty, and sender.type is "user" or content_attributes.external_echo is true. WhatsApp campaign and scheduled template sends arrive with message_type "template", so they never match.',
 					},
 				],
 				description:
-					'Events to listen to. The connected user needs access to the data behind each event.',
+					'Events to listen to. The connected person or virtual agent needs access to the data behind each event.',
 			},
 			{
 				displayName: 'Message Direction',
 				name: 'messageType',
 				type: 'options',
 				default: 'any',
-				displayOptions: { show: { events: ['message_created'] } },
+				displayOptions: { show: { events: ['message_created'], '@version': [1] } },
 				options: [
 					{ name: 'Any', value: 'any' },
 					{ name: 'Incoming (From Contacts)', value: 'incoming' },
 					{ name: 'Outgoing (From Agents and Bots)', value: 'outgoing' },
 				],
-				description: 'Which new messages start the workflow',
+				description: DIRECTION_HELP,
+			},
+			{
+				displayName: 'Message Direction',
+				name: 'messageType',
+				type: 'options',
+				default: 'incoming',
+				displayOptions: { show: { events: ['message_created'] }, hide: { '@version': [1] } },
+				options: [
+					{ name: 'Any', value: 'any' },
+					{ name: 'Incoming (From Contacts)', value: 'incoming' },
+					{ name: 'Outgoing (From Agents and Bots)', value: 'outgoing' },
+				],
+				description: DIRECTION_HELP,
 			},
 			{
 				displayName: 'Inbox Names or IDs',
@@ -246,13 +276,19 @@ export class WebzzConnectTrigger implements INodeType {
 
 				let subscription = await subscribe();
 				if (!subscription.secret) {
-					// Posting the same URL again returns the existing subscription without its
-					// secret (shown only once). Delete it and subscribe again to get a fresh secret.
-					await remove(this, subscription.id as number).catch((error) => {
-						if (readErrorInfo(error).status !== 404) return handleApiError.call(this, error);
-						return undefined;
-					});
-					subscription = await subscribe();
+					// Posting the same URL again returns the existing subscription without its secret
+					// (shown only once). Rotate it: the row stays, so an agent is never left without one.
+					try {
+						subscription = asObject(
+							await wzRawRequest.call(
+								this,
+								'POST',
+								`/webhook_subscriptions/${pathId.call(this, subscription.id)}/rotate_secret`,
+							),
+						);
+					} catch (error) {
+						return handleApiError.call(this, error);
+					}
 				}
 				if (subscription.id === undefined || !subscription.secret) {
 					throw new NodeOperationError(
@@ -271,8 +307,16 @@ export class WebzzConnectTrigger implements INodeType {
 					try {
 						await remove(this, stored.id);
 					} catch (error) {
-						// Already gone (or access revoked): nothing left to clean up on our side.
-						if (readErrorInfo(error).status !== 404) return handleApiError.call(this, error);
+						const status = readErrorInfo(error).status;
+						if (status === 401) {
+							// A revoked credential must not block deactivation. Hooks have no toast: log the fixed copy and the id only.
+							this.logger.warn(
+								`Couldn't remove WebzzConnect webhook subscription ${String(stored.id)}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks.`,
+							);
+						} else if (status !== 404) {
+							// 404: already gone, nothing left to clean up on our side.
+							return handleApiError.call(this, error);
+						}
 					}
 				}
 				delete stored.id;
@@ -316,7 +360,8 @@ export class WebzzConnectTrigger implements INodeType {
 		if (typeof body.event === 'string' && !events.includes(body.event)) {
 			return {};
 		}
-		if (body.event === 'message_created') {
+		// Every message event (created and updated): a bot's own replies and their status updates must not loop.
+		if (typeof body.event === 'string' && body.event.startsWith('message_')) {
 			const wanted = this.getNodeParameter('messageType', 'any') as string;
 			if (wanted !== 'any' && messageTypeOf(body) !== wanted) {
 				return {};

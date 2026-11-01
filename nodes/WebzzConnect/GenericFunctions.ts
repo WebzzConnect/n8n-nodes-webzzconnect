@@ -28,7 +28,34 @@ export const authenticationProperty: INodeProperties = {
 	],
 	default: 'apiKey',
 	description:
-		'For a chatbot flow, use an API key: its messages arrive with sender null ("Sent by &lt;key name&gt;"), so they never match the human-reply rule in the trigger\'s New Message description. Messages sent through OAuth show the connected user as sender.',
+		'To answer customers as a bot, use a key that acts as a virtual agent, or OAuth with Connect as → A virtual agent. The flow then sees and answers only that agent\'s conversations. For other flows, an account key\'s messages arrive with sender null.',
+};
+
+/** Client-side refusals and server refusals mapped by `[status]:code` (product.md Copy). */
+export const COPY = {
+	handoffOneTarget:
+		'A virtual agent hands a conversation to one target: a person, another virtual agent, or your team. Choose an agent or a team, not both. Nothing was changed. (handoff_one_target)',
+	connectionKindUnknown:
+		"Couldn't check which kind of connection this is, so nothing was changed. Run again. (connection_kind_unknown)",
+	assignNoTarget:
+		'Choose a person or virtual agent to assign. To remove the assignee, use Unassign. Nothing was changed. (assign_no_target)',
+	contactNotVisible:
+		'[422] This contact may already exist, but this virtual agent sees only the contacts of conversations it handles. To create or update contacts across the account, use an account key or an "as me" connection.',
+};
+
+const ERROR_COPY: Record<string, string> = {
+	'403:agent_paused':
+		'[403] The virtual agent is paused, so this connection can\'t act. Set the agent live in WebzzConnect, then run again. (agent_paused)',
+	'409:not_handling':
+		'[409] This virtual agent isn\'t handling this conversation any more: a person took it, it was handed off, or it\'s resolved. Stop the flow for this conversation. (not_handling)',
+	'422:assignee_not_available':
+		'[422] That person or virtual agent can\'t take this conversation: unknown, removed, or not in the conversation\'s inbox. Nothing was changed. (assignee_not_available)',
+	'422:conversation_resolved':
+		'[422] A virtual agent can\'t be assigned to a resolved conversation. Reopen it first, or assign a person. (conversation_resolved)',
+	'422:handoff_note_not_allowed':
+		'[422] Only the virtual agent handling this conversation can add a hand-off note, and only when it hands the conversation to someone. Remove the note, or use a virtual agent connection. Nothing was changed. (handoff_note_not_allowed)',
+	'422:handoff_note_invalid':
+		'[422] The hand-off note must be 1 to 500 characters. Nothing was changed. (handoff_note_invalid)',
 };
 
 export type WzContext =
@@ -81,8 +108,8 @@ export function getCredentialName(this: WzContext): string {
 	return selected === 'oAuth2' ? PKCE_CREDENTIAL : API_KEY_CREDENTIAL;
 }
 
-// token_info lookups for API-key credentials, remembered for the lifetime of one execution context.
-const accountIdCache = new WeakMap<object, string>();
+// token_info answers, remembered for the lifetime of one execution context (never module-level).
+const tokenInfoCache = new WeakMap<object, IDataObject>();
 
 async function sendRequest(
 	this: WzContext,
@@ -115,7 +142,19 @@ export async function getAccountId(this: WzContext): Promise<string> {
 			return String(tokenData.account_id);
 		}
 	}
-	const cached = accountIdCache.get(this);
+	const account = (await getTokenInfo.call(this)).account as IDataObject | undefined;
+	if (account?.id === undefined) {
+		throw new NodeOperationError(
+			this.getNode(),
+			'Could not determine the WebzzConnect account for this credential. Check the API key, or reconnect the OAuth credential.',
+		);
+	}
+	return String(account.id);
+}
+
+/** The token_info body of the credential in use: kind, account, user, virtual_agent. */
+async function getTokenInfo(this: WzContext): Promise<IDataObject> {
+	const cached = tokenInfoCache.get(this);
 	if (cached !== undefined) return cached;
 	const info = (await sendRequest.call(
 		this,
@@ -123,16 +162,17 @@ export async function getAccountId(this: WzContext): Promise<string> {
 		`${BASE_URL}/api/v1/token_info`,
 		{},
 	)) as IDataObject;
-	const account = info.account as IDataObject | undefined;
-	if (account?.id === undefined) {
-		throw new NodeOperationError(
-			this.getNode(),
-			'Could not determine the WebzzConnect account for this credential. Check the API key, or reconnect the OAuth credential.',
-		);
+	tokenInfoCache.set(this, info);
+	return info;
+}
+
+/** getTokenInfo with readable errors, for steps that decide on `kind` before any write. */
+export async function getConnectionInfo(this: WzContext): Promise<IDataObject> {
+	try {
+		return await getTokenInfo.call(this);
+	} catch (error) {
+		return handleApiError.call(this, error);
 	}
-	const accountId = String(account.id);
-	accountIdCache.set(this, accountId);
-	return accountId;
 }
 
 /**
@@ -145,6 +185,25 @@ export function pathId(this: WzContext, value: unknown): string {
 		throw new NodeOperationError(this.getNode(), `"${String(value)}" is not a valid ID (a number)`);
 	}
 	return id;
+}
+
+/**
+ * The picker value of an assignee: `5` / `User:5` (a person) or `AgentBot:5` (a virtual agent).
+ * Empty answers undefined. Zero or a non-numeric id is refused before any request: the server
+ * reads 0 and "" as "nobody", and Number("AgentBot:5") is NaN, which JSON turns into null.
+ */
+export function parseAssignee(
+	this: WzContext,
+	value: unknown,
+): { id: string; type: 'User' | 'AgentBot' } | undefined {
+	const raw = String(value ?? '').trim();
+	if (raw === '') return undefined;
+	const match = /^(?:(User|AgentBot):)?(\d+)$/.exec(raw);
+	if (!match) {
+		throw new NodeOperationError(this.getNode(), `"${raw}" is not a valid agent (a number, or AgentBot:number)`);
+	}
+	if (/^0+$/.test(match[2])) throw new NodeOperationError(this.getNode(), COPY.assignNoTarget);
+	return { id: match[2], type: match[1] === 'AgentBot' ? 'AgentBot' : 'User' };
 }
 
 /** Request below /api/v1/accounts/:id. Throws the original error (see handleApiError). */
@@ -225,15 +284,18 @@ export function handleApiError(this: WzContext, error: unknown): never {
 	};
 	if (info.status !== undefined) options.httpCode = String(info.status);
 
-	if (info.status === 429) {
+	const code = String(info.body?.error_code ?? info.body?.error ?? '');
+	const copy = ERROR_COPY[`${info.status}:${code}`];
+
+	if (copy) {
+		options.message = copy;
+	} else if (info.status === 429) {
 		options.message = 'WebzzConnect rate limit reached';
 		options.description = info.retryAfter
 			? `Too many requests. WebzzConnect asks you to retry after ${info.retryAfter} seconds (Retry-After). Add a Wait node or enable "Retry On Fail" for this node.`
 			: 'Too many requests. Wait a moment and retry, or enable "Retry On Fail" for this node. Contact search is limited to 100 requests per minute per account.';
 	} else if (info.status === 403) {
-		options.message = info.message || 'Forbidden';
-		options.description =
-			'The API key or OAuth consent does not allow this action (insufficient scope or inbox restriction). Check the key\'s permissions in WebzzConnect, or reconnect the OAuth credential and approve all requested permissions.';
+		options.message = `[403] This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. (${info.message})`;
 	} else if (info.status === 401) {
 		options.description =
 			'The WebzzConnect API key or access token was rejected. Check the API key (it may have been revoked), or reconnect the OAuth credential. A password change in WebzzConnect revokes OAuth connections.';

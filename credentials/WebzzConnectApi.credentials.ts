@@ -25,8 +25,15 @@ export class WebzzConnectApi implements ICredentialType {
 	properties: INodeProperties[] = [
 		{
 			displayName:
-				'Use on self-hosted n8n. Create the key in WebzzConnect > Settings > API keys (admins).',
+				'Use on self-hosted n8n.',
 			name: 'notice',
+			type: 'notice',
+			default: '',
+		},
+		{
+			displayName:
+				'Create the key in WebzzConnect → Settings → API keys. To answer customers as a bot, make the key act as a virtual agent (admins only): its role then decides what it can do, and this connection sees only the conversations that agent handles. For reminders, CRM sync and other account-wide flows, use a key that doesn\'t act as a virtual agent and tick the scopes it needs.',
+			name: 'agentNotice',
 			type: 'notice',
 			default: '',
 		},

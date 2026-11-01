@@ -4,6 +4,12 @@ const show = (operations: string[]) => ({ resource: ['conversation'], operation:
 const showType = (types: string[]) => ({ ...show(['sendMessage']), messageType: types });
 const INTERACTIVE = ['button', 'list', 'cta_url'];
 
+export const STATUS_ON_SEND =
+	'Leave empty for the default. Resolved suits reminders and one-off notices: the conversation doesn\'t wait in your team\'s queue, and the customer\'s reply opens it again.';
+
+const NOTE_HELP =
+	'Optional, up to 500 characters. Shown in the conversation to whoever takes over; never sent to the customer. Only a virtual agent connection that handles the conversation can add one, and only when the assignee changes.';
+
 export const conversationOperations: INodeProperties[] = [
 	{
 		displayName: 'Operation',
@@ -46,7 +52,7 @@ export const conversationOperations: INodeProperties[] = [
 				name: 'Send Message',
 				value: 'sendMessage',
 				description:
-					"Reply in a conversation. For a chatbot flow, use an API key: its messages arrive with sender null, so they never match the trigger's human-reply rule.",
+					'Reply in a conversation. A virtual agent connection can send only into conversations the agent handles.',
 				action: 'Send a message in a conversation',
 			},
 			{
@@ -101,7 +107,20 @@ export const conversationFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['create']) },
 		description:
-			'Optional. On WhatsApp, a free-text message only reaches the contact inside the 24-hour window. Use the WhatsApp Template resource to start a conversation.',
+			'Optional. On WhatsApp, a free-text message only reaches the contact inside the 24-hour window. Use the WhatsApp Template resource to start a conversation. With a virtual agent connection, a new conversation is handled by that agent, so the customer\'s reply comes to your flow. A virtual agent can send only into conversations it handles: for reminders and broadcasts, use an account key or an "as me" connection.',
+	},
+	{
+		displayName: 'Status',
+		name: 'initialStatus',
+		type: 'options',
+		options: [
+			{ name: 'Default', value: '' },
+			{ name: 'Open', value: 'open' },
+			{ name: 'Resolved', value: 'resolved' },
+		],
+		default: '',
+		displayOptions: { show: show(['create']) },
+		description: STATUS_ON_SEND,
 	},
 
 	// get, sendMessage
@@ -390,7 +409,7 @@ export const conversationFields: INodeProperties[] = [
 		type: 'string',
 		required: true,
 		default: '',
-		placeholder: 'human, vip',
+		placeholder: 'vip, hot-lead',
 		displayOptions: { show: show(['addLabels']) },
 		description:
 			'Comma-separated labels to add (sent in lowercase). Labels the conversation already has are kept.',
@@ -415,7 +434,7 @@ export const conversationFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['assign']) },
 		description:
-			'Optional if a team is chosen. The agent must be a member of the conversation\'s inbox; an unknown agent makes the node fail. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'A person or virtual agent in the conversation\'s inbox. An unknown or unavailable one is refused and nothing changes. In an expression, a virtual agent is AgentBot:ID. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 	},
 	{
 		displayName: 'Team Name or ID',
@@ -425,7 +444,15 @@ export const conversationFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['assign']) },
 		description:
-			'Optional if an agent is chosen. The team is assigned first, then the agent. A team with auto-assign may briefly assign one of its members before the chosen agent. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'Pick a team, an agent, or both. With both, the team is set first, then the agent. A virtual agent connection hands off to one target: pick a team or an agent, not both. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+	{
+		displayName: 'Hand-Off Note',
+		name: 'handoffNote',
+		type: 'string',
+		default: '',
+		displayOptions: { show: show(['assign', 'unassign']) },
+		description: NOTE_HELP,
 	},
 
 	// unassign
@@ -440,7 +467,8 @@ export const conversationFields: INodeProperties[] = [
 		],
 		default: 'agent',
 		displayOptions: { show: show(['unassign']) },
-		description: 'What to remove from the conversation',
+		description:
+			'Removes the agent: the conversation goes to your team, to the queue (Open, unassigned) or to a member if the inbox auto-assigns. With a virtual agent connection this is a hand-off; add a hand-off note to say why.',
 	},
 
 	// updateStatus
@@ -452,11 +480,16 @@ export const conversationFields: INodeProperties[] = [
 			{ name: 'Open', value: 'open' },
 			{ name: 'Resolved', value: 'resolved' },
 			{ name: 'Snoozed', value: 'snoozed' },
+			{
+				name: 'Waiting on Customer',
+				value: 'pending',
+				description: 'Stays assigned. The customer\'s reply reopens it to the same person.',
+			},
 		],
 		default: 'resolved',
 		displayOptions: { show: show(['updateStatus']) },
 		description:
-			'Resolved sends the CSAT survey to the customer when the inbox has CSAT turned on. Open through an OAuth connection made by an agent-role user also assigns the conversation to that user and replaces the current assignee. API keys do not do this, but inbox auto-assignment may assign an unassigned reopened conversation.',
+			'Resolved ends the conversation and sends the CSAT survey when the inbox has CSAT on. Waiting on customer keeps a person\'s conversation assigned until the customer replies. With a virtual agent connection: Open hands the conversation to your team (the queue, or a member if the inbox auto-assigns), Resolved also releases the bot so the customer\'s next message starts fresh, and a conversation the agent doesn\'t handle is refused. Open through an "as me" connection of an agent-role user also assigns the conversation to that user.',
 	},
 	{
 		displayName: 'Snooze Until',
@@ -509,11 +542,22 @@ export const conversationFields: INodeProperties[] = [
 				options: [
 					{ name: 'All', value: 'all' },
 					{ name: 'Open', value: 'open' },
-					{ name: 'Pending', value: 'pending' },
+					{ name: 'Pending (Both)', value: 'pending' },
 					{ name: 'Resolved', value: 'resolved' },
 					{ name: 'Snoozed', value: 'snoozed' },
+					{ name: 'Waiting on Customer', value: 'waiting_on_customer' },
+					{ name: 'With a Virtual Agent', value: 'with_virtual_agent' },
 				],
 				default: 'open',
+				description:
+					'With a virtual agent connection you find only the conversations the agent handles. Choose With a Virtual Agent or All; Open finds none.',
+			},
+			{
+				displayName: 'Virtual Agent ID',
+				name: 'agentId',
+				type: 'string',
+				default: '',
+				description: 'Only conversations this virtual agent handles',
 			},
 		],
 	},

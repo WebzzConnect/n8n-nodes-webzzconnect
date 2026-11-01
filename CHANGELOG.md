@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- **Virtual agents.** Credentials can act as a virtual agent (API key that acts as the agent, or OAuth with Connect as → A virtual agent). New **Connection → Get Info** shows who a credential acts as and works while the agent is paused.
+- Conversation > **Assign** / **Unassign**: the Agent picker lists people and virtual agents; new **Hand-Off Note**; a team plus an agent on a virtual agent connection is refused before any write. An unknown or unavailable assignee is refused by the server instead of unassigning. A zero or malformed agent is refused with no request. After a write the node no longer fails when the connection can no longer see the conversation (a virtual agent that let go): it returns what the write answered.
+- Conversation > **Update Status**: new **Waiting on Customer**. **Get Many**: new statuses **With a Virtual Agent**, **Waiting on Customer** and **Pending (Both)**, and a **Virtual Agent ID** filter. Defaults are unchanged.
+- Conversation > **Create** and WhatsApp Template > **Send**: optional **Status** (Open or Resolved).
+- Clear error messages with the HTTP status and the server code for `not_handling`, `agent_paused`, `assignee_not_available`, `conversation_resolved` and the hand-off note refusals.
+- Trigger: new event **Conversation Handed Off**. **Message Direction** now applies to new and updated messages. **Trigger version 1.1** defaults Direction to Incoming so a reply bot doesn't answer its own messages; existing workflows keep Any.
+- Trigger: activating with an address that is already registered rotates the secret instead of deleting and recreating the registration. Deactivating with a revoked credential completes and logs a warning.
+- The WhatsApp sales example now uses a virtual agent and a hand-off with a note instead of the `human` label.
+
 ## 0.4.0
 
 - Conversation > Send Message: new **Message Type**: Text, **Reply Buttons** (up to 3), **List** (up to 10 rows, optional menu label, descriptions and sections) and **Link Button** (one URL button). **Interactive Options** add a text, image, video or document header and a footer. A list only takes a text header. WhatsApp's limits are checked by WebzzConnect, which answers with a clear message.

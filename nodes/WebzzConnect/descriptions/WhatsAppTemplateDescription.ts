@@ -1,5 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
+import { STATUS_ON_SEND } from './ConversationDescription';
+
 const show = (operations: string[]) => ({ resource: ['whatsAppTemplate'], operation: operations });
 
 export const whatsAppTemplateOperations: INodeProperties[] = [
@@ -41,6 +43,19 @@ export const whatsAppTemplateFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['send']) },
 		description: 'The contact must have a phone number',
+	},
+	{
+		displayName: 'Status',
+		name: 'initialStatus',
+		type: 'options',
+		options: [
+			{ name: 'Default', value: '' },
+			{ name: 'Open', value: 'open' },
+			{ name: 'Resolved', value: 'resolved' },
+		],
+		default: '',
+		displayOptions: { show: show(['send']) },
+		description: STATUS_ON_SEND,
 	},
 	{
 		displayName: 'Template Name or ID',
