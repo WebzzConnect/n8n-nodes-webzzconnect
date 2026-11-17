@@ -22,6 +22,7 @@ import {
 	COPY,
 	asArray,
 	asObject,
+	assertNotFailed,
 	authenticationProperty,
 	digitsOnly,
 	errorForItem,
@@ -410,6 +411,11 @@ function interactiveAttributes(
  * the message references it in `attachments`; the text becomes optional when a file is given.
  * Buttons, list and link button: an `input_select` message, a media header is its one attachment.
  */
+/** The message a conversation create answered with, if any. */
+function firstMessage(conversation: IDataObject): unknown {
+	return Array.isArray(conversation.messages) ? conversation.messages[0] : undefined;
+}
+
 async function sendConversationMessage(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
 	const type = this.getNodeParameter('messageType', i, 'text') as string;
@@ -445,7 +451,11 @@ async function sendConversationMessage(this: IExecuteFunctions, i: number): Prom
 	}
 	if (content) body.content = content;
 	if (fileUrl) body.attachments = [await uploadByUrl.call(this, fileUrl, i)];
-	return asObject(await wzApiRequest.call(this, 'POST', `/conversations/${id}/messages`, { body }));
+	const message = asObject(
+		await wzApiRequest.call(this, 'POST', `/conversations/${id}/messages`, { body }),
+	);
+	assertNotFailed.call(this, message, i);
+	return message;
 }
 
 /** Merged into the existing attributes: the endpoint replaces the whole hash. */
@@ -652,7 +662,9 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 	};
 	const status = this.getNodeParameter('initialStatus', i, '') as string;
 	if (status) body.status = status;
-	return asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
+	const conversation = asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
+	assertNotFailed.call(this, firstMessage(conversation), i);
+	return conversation;
 }
 
 export class WebzzConnect implements INodeType {
@@ -948,6 +960,8 @@ export class WebzzConnect implements INodeType {
 						const status = this.getNodeParameter('initialStatus', i, '') as string;
 						if (status) body.status = status;
 						result = asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
+						// Without a message the answer's messages[0] is an older one: nothing was sent now.
+						if (content) assertNotFailed.call(this, firstMessage(result), i);
 					} else if (operation === 'sendMessage') {
 						result = await sendConversationMessage.call(this, i);
 					} else if (operation === 'get') {

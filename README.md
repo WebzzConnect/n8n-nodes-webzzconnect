@@ -1,6 +1,6 @@
 # @webzzconnect/n8n-nodes-webzzconnect
 
-This is an n8n community node package for [WebzzConnect](https://connect.webzz.cloud), the omnichannel inbox, CRM and chatbot platform for small businesses. It lets you manage contacts, deals, conversations and WhatsApp templates from your n8n workflows, and start workflows instantly when something happens in WebzzConnect.
+This is an n8n community node package for [WebzzConnect](https://app.webzz.io), the omnichannel inbox, CRM and chatbot platform for small businesses. It lets you manage contacts, deals, conversations and WhatsApp templates from your n8n workflows, and start workflows instantly when something happens in WebzzConnect.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
@@ -12,7 +12,7 @@ Follow the [community nodes installation guide](https://docs.n8n.io/integrations
 
 ## Credentials
 
-The package ships two credentials. Both nodes have an **Authentication** selector to pick one. The WebzzConnect address is fixed (`https://connect.webzz.cloud`), so there is no URL field.
+The package ships two credentials. Both nodes have an **Authentication** selector to pick one. The WebzzConnect address is fixed (`https://app.webzz.io`), so there is no URL field. Credentials created before 0.5.1 (on the old `connect.webzz.cloud` address) keep working; the old address still answers.
 
 **WebzzConnect API (self-hosted n8n)**
 
@@ -29,7 +29,7 @@ Create the key in WebzzConnect → Settings → API keys. To answer customers as
 
 To answer customers as a bot, choose Connect as → A virtual agent on the consent screen (admins only, one account). Choose Me to act as yourself.
 
-Add a trigger on the same connection: it keeps the agent listening. With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential. If a credential was revoked while the workflow was active, deactivation still completes and writes "Couldn't remove WebzzConnect webhook subscription {id}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks." to the n8n log; delete the leftover in WebzzConnect → Settings → App webhooks.
+Add a trigger on the same connection: it keeps the agent listening. With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect: while it is paused, its connection reaches only its test chat. Deactivate the workflow before you switch its credential. If a credential was revoked while the workflow was active, deactivation still completes and writes "Couldn't remove WebzzConnect webhook subscription {id}: the credential is no longer valid. It may keep sending events to this URL until it's removed in WebzzConnect → Settings → App webhooks." to the n8n log; delete the leftover in WebzzConnect → Settings → App webhooks.
 
 Replacing a connection: switching a trigger's credential, even to another credential of the same account, leaves the old subscription delivering to the old address until it is deleted. A leftover row of a virtual agent keeps that agent listening. Replacing an all-inboxes key with a one-inbox key makes activation fail with a 422 until the old row is gone. The remedy is the same: an administrator deletes the subscription in WebzzConnect → Settings → App webhooks.
 
@@ -37,7 +37,7 @@ Two agents' flows can hand a conversation back and forth (A hands to B, B hands 
 
 A conversation the bot holds and the customer leaves quiet gets a nudge after 5 minutes and closes 10 minutes later (auto-closed).
 
-Use **Connection → Get Info** to see who a credential acts as (`kind`, account, virtual agent, person). It works while the agent is paused.
+Use **Connection → Get Info** to see who a credential acts as (`kind`, account, virtual agent, person). While the agent is paused, its connection reaches only its test chat.
 
 **Hand off to a person or another agent**
 
@@ -49,7 +49,7 @@ A person replied when `message_type` is outgoing, `private` is false, `content_a
 
 `button_payload` is customer input: compare it with Equals in a Switch node and keep a fallback; never use it in a Code node, a URL or an ID field.
 
-Both credentials also work with n8n's HTTP Request node (**Predefined Credential Type**) for any WebzzConnect API call this node does not cover. Requests go to `https://connect.webzz.cloud/api/v1/accounts/<account id>/...`.
+Both credentials also work with n8n's HTTP Request node (**Predefined Credential Type**) for any WebzzConnect API call this node does not cover. Requests go to `https://app.webzz.io/api/v1/accounts/<account id>/...`.
 
 ## Operations
 
@@ -66,6 +66,10 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Move Stage (including won and lost, with an optional lost reason and note)
 - Get
 - Search (query, contact, pipeline, stage, owner, status)
+
+Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `name`, `ad`: where the lead came from) and `created` (`kind`, `by`: how the deal was made). The older `source` field is no longer sent by WebzzConnect; workflows that read `$json.source` should read `original_source` instead.
+
+**Pipelines and access.** An account API key sees every pipeline. A person (OAuth as me) or a virtual agent sees only the pipelines they are a member of; an administrator adds members in WebzzConnect's CRM settings. So for such a connection the pipeline list can be short or empty, a deal in another pipeline answers 404, and Create with the default pipeline answers `[422] pipeline_required` when the default pipeline isn't one of theirs (pick a pipeline). A deal's owner must also be a member of its pipeline.
 
 **Conversation**
 - Create (with an optional first message and an optional Status). With a virtual agent connection, a new conversation is handled by that agent, so the customer's reply comes to your flow. A virtual agent can send only into conversations it handles: for reminders and broadcasts, use an account key or an "as me" connection.
@@ -85,9 +89,9 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Send: choose a WhatsApp inbox, a contact and an approved template, then fill the fields that appear for the template: header text or media URL, body variables (numbered or named), URL button variables and the copy-code coupon. If the template is set by an expression, fill **Body Variables** in order instead. The message is created in the contact's open conversation, or in a new one.
 
 **Custom API Call**
-- For an endpoint the node doesn't cover, pick **Custom API Call** in the node's actions. It opens an HTTP Request node. Set **Authentication** to *Predefined Credential Type*, choose **WebzzConnect API** (or **WebzzConnect OAuth2 API**), and call `https://connect.webzz.cloud/api/v1/accounts/<account id>/...`.
+- For an endpoint the node doesn't cover, pick **Custom API Call** in the node's actions. It opens an HTTP Request node. Set **Authentication** to *Predefined Credential Type*, choose **WebzzConnect API** (or **WebzzConnect OAuth2 API**), and call `https://app.webzz.io/api/v1/accounts/<account id>/...`.
 
-List-style operations have **Return All** and **Limit**. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect; a rate-limit error tells you how long to wait.
+List-style operations have **Return All** and **Limit**. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect, in the account's language; a refusal with a code shows as `[status] message (code)`; a rate-limit error tells you how long to wait.
 
 ## Trigger
 
@@ -110,8 +114,14 @@ The connected person or virtual agent needs access to the data behind each event
 | Code | What it means | What to do |
 |---|---|---|
 | `[409] not_handling` | This virtual agent isn't handling this conversation any more: a person took it, it was handed off, or it's resolved. | Stop the flow for this conversation. |
-| `[403] agent_paused` | The virtual agent is paused, so this connection can't act. | Set the agent live in WebzzConnect, then run again. |
-| `[403]` other | This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. | Check the server message in brackets. |
+| `[403] feature_disabled` | The credential is valid, but the account's plan doesn't include this area (for example API and webhooks, or the CRM). | An account owner changes the plan. |
+| `[402] limit_exceeded` | The account reached a plan limit, for example the number of webhooks when a trigger is activated. | Remove unused items (other active trigger workflows) or upgrade the plan. |
+| `monthly_active_contacts_limit_reached` | The message wasn't sent: the account reached its monthly active contacts limit. Send Message, Conversation Create and WhatsApp Template Send fail instead of returning the failed message. | An account owner upgrades the plan. |
+| `[403] owner_not_assignable` | This connection can't set that deal owner: it may not change owners, or the owner must be a member of the deal's pipeline. | Choose a pipeline member, or use an account key. |
+| `[422] owner_not_pipeline_member` | The owner isn't a member of the deal's pipeline. | Choose a member, or ask an administrator to add them. |
+| `[422] pipeline_required` | No pipeline was chosen and this connection can't see the account's default pipeline. | Choose a pipeline. |
+| `[409] active_conversation_not_visible` | The customer already has a conversation on this number that this connection can't see. | Ask an administrator, or use an account key. |
+| `[403]` other (`forbidden`, `insufficient_scope`, or no code) | This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. | Check the server message in brackets. |
 | `[422] assignee_not_available` | That person or virtual agent is unknown, removed, or not in the conversation's inbox. | Nothing was changed; pick another. |
 | `[422] conversation_resolved` | A virtual agent can't be assigned to a resolved conversation. | Reopen it first, or assign a person. |
 | `[422] handoff_note_not_allowed` | Only the virtual agent handling the conversation can add a hand-off note, and only when it hands the conversation to someone. | Remove the note, or use a virtual agent connection. |
@@ -135,7 +145,7 @@ Tested with n8n 1.x and 2.x (Node.js 22). Requires a WebzzConnect account.
 ## Resources
 
 - [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-- [WebzzConnect](https://connect.webzz.cloud)
+- [WebzzConnect](https://app.webzz.io)
 
 ## Version history
 

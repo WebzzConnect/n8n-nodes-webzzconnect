@@ -12,7 +12,7 @@ export const connectionOperations: INodeProperties[] = [
 				name: 'Get Info',
 				value: 'getInfo',
 				description:
-					'Who this credential acts as: the account, and the virtual agent or person, with the agent\'s status. Works while the agent is paused.',
+					'Who this credential acts as: the account, and the virtual agent or person, with the agent\'s status. While the agent is paused, its connection reaches only its test chat.',
 				action: 'Get info about this connection',
 			},
 		],

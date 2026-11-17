@@ -8,7 +8,7 @@ const { WebzzConnect } = require('../dist/nodes/WebzzConnect/WebzzConnect.node.j
 const { errorForItem } = require('../dist/nodes/WebzzConnect/GenericFunctions.js');
 
 const node = { name: 'WebzzConnect', type: 'webzzConnect', typeVersion: 1, position: [0, 0], parameters: {} };
-const BASE = 'https://connect.webzz.cloud';
+const BASE = 'https://app.webzz.io';
 
 function hookContext({ stored, webhookUrl, subscription, parameters: extra = {} }) {
 	const parameters = { authentication: 'oAuth2', ...extra };
@@ -210,7 +210,11 @@ test('credentials: no URL field, API key credential is a Bearer header', () => {
 	assert.equal(field(oauth, 'grantType').default, 'pkce');
 	assert.equal(field(oauth, 'clientSecret').default, '');
 	assert.equal(field(oauth, 'clientId').default, '-nXfHxzbF6UryNF2eXwo2ufe3tbvUA2rbTZ-k6Mz-gM');
-	assert.match(field(oauth, 'authUrl').default, /^https:\/\/connect\.webzz\.cloud\/oauth\/authorize$/);
+	assert.equal(field(oauth, 'authUrl').default, 'https://app.webzz.io/oauth/authorize');
+	assert.equal(field(oauth, 'accessTokenUrl').default, 'https://app.webzz.io/oauth/token');
+	assert.equal(api.test.request.baseURL, 'https://app.webzz.io');
+	assert.equal(api.documentationUrl, 'https://api-docs.webzz.io');
+	assert.equal(oauth.documentationUrl, 'https://api-docs.webzz.io');
 });
 
 // --- Conversation actions ---
@@ -389,17 +393,24 @@ test('write outcomes: a read-back 404 is a success built from the write response
 	);
 });
 
-test('errors: each mapped code shows its copy with [status] and (code); others keep the server message', async () => {
+test('errors: mapped codes show their copy; other coded refusals show [status] server message (code)', async () => {
 	const cases = [
-		[403, { error: 'agent_paused', message: 'Hebrew text' }, /^\[403\] The virtual agent is paused.*\(agent_paused\)$/],
 		[409, { error: 'not_handling', error_code: 'not_handling' }, /^\[409\] This virtual agent isn't handling.*\(not_handling\)$/],
 		[422, { error_code: 'assignee_not_available', message: 'Alice Smith is gone' }, /^\[422\] That person or virtual agent can't take.*\(assignee_not_available\)$/],
 		[422, { error_code: 'conversation_resolved' }, /^\[422\] A virtual agent can't be assigned to a resolved.*\(conversation_resolved\)$/],
 		[422, { error_code: 'handoff_note_not_allowed' }, /^\[422\] Only the virtual agent handling.*\(handoff_note_not_allowed\)$/],
 		[422, { error_code: 'handoff_note_invalid' }, /^\[422\] The hand-off note must be 1 to 500.*\(handoff_note_invalid\)$/],
 		[403, { error: 'insufficient_scope', message: 'Needs deals:edit' }, /^\[403\] This connection isn't allowed.*\(Needs deals:edit\)$/],
-		[422, { error_code: 'something_else', message: 'Server says no' }, /^Server says no$/],
-		[409, { error: 'other', message: 'Server conflict' }, /^Server conflict$/],
+		[403, { error: 'forbidden', message: 'Nope' }, /^\[403\] This connection isn't allowed.*\(Nope\)$/],
+		[403, { message: 'No code' }, /^\[403\] This connection isn't allowed.*\(No code\)$/],
+		[403, { error: 'feature_disabled', message: 'The plan of Acme does not include API and webhooks.', area: 'api_and_webhooks' }, /^\[403\] The plan of Acme does not include API and webhooks\. \(feature_disabled\)$/],
+		[402, { error: 'limit_exceeded', error_code: 'limit_exceeded', message: 'Webhooks: 3 of 3 used.', limit_key: 'webhooks' }, /^\[402\] Webhooks: 3 of 3 used\. \(limit_exceeded\)$/],
+		[422, { error_code: 'owner_not_pipeline_member', message: "This person isn't a member of the deal's pipeline.", attributes: ['owner_id'] }, /^\[422\] This person isn't a member of the deal's pipeline\. \(owner_not_pipeline_member\)$/],
+		[403, { error: 'owner_not_assignable', error_code: 'owner_not_assignable', message: 'The owner must be a member of this deal\'s pipeline.' }, /^\[403\] The owner must be a member.*\(owner_not_assignable\)$/],
+		[422, { error_code: 'pipeline_required', message: 'Choose a pipeline for this deal.' }, /^\[422\] Choose a pipeline for this deal\. \(pipeline_required\)$/],
+		[409, { error: 'active_conversation_not_visible', message: "You can't start a chat with this customer on this number." }, /^\[409\] You can't start a chat.*\(active_conversation_not_visible\)$/],
+		[422, { error_code: 'something_else', message: 'Server says no' }, /^\[422\] Server says no \(something_else\)$/],
+		[422, { error: 'Contact not found' }, /^Contact not found$/],
 	];
 	for (const [status, body, pattern] of cases) {
 		const calls = [];
@@ -519,6 +530,52 @@ test('create and template send: status is sent only when filled', async () => {
 	assert.equal((await run('conversation', 'create', { initialStatus: 'resolved' })).status, 'resolved');
 	assert.equal('status' in (await run('whatsAppTemplate', 'send', { initialStatus: '' })), false);
 	assert.equal((await run('whatsAppTemplate', 'send', { initialStatus: 'resolved' })).status, 'resolved');
+});
+
+test('errors: feature_disabled and limit_exceeded add guidance as the description', async () => {
+	const description = async (status, body) => {
+		try {
+			await script('conversation', 'get', { conversationId: '4' }, () => refusal(status, body));
+		} catch (error) {
+			return error.description;
+		}
+		assert.fail('expected a refusal');
+	};
+	assert.match(await description(403, { error: 'feature_disabled', message: 'x' }), /plan doesn't include this area/);
+	assert.match(await description(402, { error: 'limit_exceeded', message: 'x' }), /plan limit/);
+});
+
+test('sends: a message WebzzConnect refused at once (status failed) fails the step; others succeed', async () => {
+	const limit = { id: 1, status: 'failed', failure_code: 'monthly_active_contacts_limit_reached' };
+	const send = (answer) => script('conversation', 'sendMessage', { conversationId: '4', content: 'hi', fileUrl: '' }, () => answer);
+	await assert.rejects(send(limit), (error) => {
+		assert.ok(error instanceof NodeOperationError);
+		assert.match(error.message, /monthly active contacts limit.*\(monthly_active_contacts_limit_reached\)$/);
+		return true;
+	});
+	await assert.rejects(send({ id: 1, status: 'failed' }), /The message wasn't sent\. \(failed\)$/);
+	assert.equal((await send({ id: 1, status: 'sent' })).out[0].status, 'sent');
+	assert.equal((await send({ id: 1 })).out[0].id, 1);
+
+	const inbox = { id: 3, message_templates: [{ name: 'hello', language: 'en', category: 'UTILITY', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hi' }] }] };
+	const created = (status) => (m, p) => (p === '/inboxes' ? [inbox] : { id: 8, messages: [{ id: 1, status, failure_code: status === 'failed' ? limit.failure_code : null }] });
+	const template = (status) => script('whatsAppTemplate', 'send', { inboxId: '3', contactId: '9', template: 'hello::en' }, created(status));
+	const create = (status) => script('conversation', 'create', { inboxId: '3', contactId: '9', content: 'hi' }, created(status));
+	await assert.rejects(template('failed'), /monthly_active_contacts_limit_reached/);
+	await assert.rejects(create('failed'), /monthly_active_contacts_limit_reached/);
+	assert.equal((await template('sent')).out[0].id, 8);
+	assert.equal((await create('pending')).out[0].id, 8);
+	assert.equal((await script('conversation', 'create', { inboxId: '3', contactId: '9' }, () => ({ id: 8 }))).out[0].id, 8);
+	// No message sent: an older failed message returned as messages[0] is not this step's failure.
+	assert.equal((await script('conversation', 'create', { inboxId: '3', contactId: '9' }, created('failed'))).out[0].id, 8);
+});
+
+test('sends: with continueOnFail a blocked message becomes an error item', async () => {
+	const ctx = execContext({ parameters: { resource: 'conversation', operation: 'sendMessage', conversationId: '4', content: 'hi', fileUrl: '' }, calls: [] });
+	ctx.continueOnFail = () => true;
+	ctx.helpers.httpRequestWithAuthentication = async () => ({ id: 1, status: 'failed', failure_code: 'monthly_active_contacts_limit_reached' });
+	const out = await new WebzzConnect().execute.call(ctx);
+	assert.match(out[0][0].json.error, /monthly_active_contacts_limit_reached/);
 });
 
 test('contact upsert: a 422 miss says contact_not_visible only on a virtual agent connection', async () => {

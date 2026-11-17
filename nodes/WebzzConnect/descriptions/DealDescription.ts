@@ -67,7 +67,7 @@ export const dealFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['create']) },
 		description:
-			'Leave empty for the default pipeline. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'Leave empty for the default pipeline. Lists only the pipelines this connection can see: an account API key sees all; a person or virtual agent sees the pipelines they are a member of (an administrator adds members in CRM settings). Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 	},
 	{
 		displayName: 'Stage Name or ID',
@@ -123,7 +123,8 @@ export const dealFields: INodeProperties[] = [
 				name: 'ownerId',
 				type: 'string',
 				default: '',
-				description: 'ID of the agent who owns the deal',
+				description:
+					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
 			},
 			{ displayName: 'Value', name: 'value', type: 'number', default: 0 },
 		],
@@ -172,7 +173,14 @@ export const dealFields: INodeProperties[] = [
 				type: 'dateTime',
 				default: '',
 			},
-			{ displayName: 'Owner ID', name: 'ownerId', type: 'string', default: '' },
+			{
+				displayName: 'Owner ID',
+				name: 'ownerId',
+				type: 'string',
+				default: '',
+				description:
+					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
+			},
 			{ displayName: 'Title', name: 'title', type: 'string', default: '' },
 			{ displayName: 'Value', name: 'value', type: 'number', default: 0 },
 		],

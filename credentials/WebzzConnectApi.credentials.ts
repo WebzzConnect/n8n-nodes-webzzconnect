@@ -20,7 +20,7 @@ export class WebzzConnectApi implements ICredentialType {
 		dark: 'file:../nodes/WebzzConnect/webzzconnect.dark.svg',
 	};
 
-	documentationUrl = 'https://api-connect.webzz.cloud';
+	documentationUrl = 'https://api-docs.webzz.io';
 
 	properties: INodeProperties[] = [
 		{
@@ -58,7 +58,7 @@ export class WebzzConnectApi implements ICredentialType {
 
 	test: ICredentialTestRequest = {
 		request: {
-			baseURL: 'https://connect.webzz.cloud',
+			baseURL: 'https://app.webzz.io',
 			url: '/api/v1/token_info',
 		},
 	};

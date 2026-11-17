@@ -12,7 +12,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
-export const BASE_URL = 'https://connect.webzz.cloud';
+export const BASE_URL = 'https://app.webzz.io';
 
 export const API_KEY_CREDENTIAL = 'webzzConnectApi';
 export const PKCE_CREDENTIAL = 'webzzConnectOAuth2Api';
@@ -44,8 +44,6 @@ export const COPY = {
 };
 
 const ERROR_COPY: Record<string, string> = {
-	'403:agent_paused':
-		'[403] The virtual agent is paused, so this connection can\'t act. Set the agent live in WebzzConnect, then run again. (agent_paused)',
 	'409:not_handling':
 		'[409] This virtual agent isn\'t handling this conversation any more: a person took it, it was handed off, or it\'s resolved. Stop the flow for this conversation. (not_handling)',
 	'422:assignee_not_available':
@@ -56,6 +54,17 @@ const ERROR_COPY: Record<string, string> = {
 		'[422] Only the virtual agent handling this conversation can add a hand-off note, and only when it hands the conversation to someone. Remove the note, or use a virtual agent connection. Nothing was changed. (handoff_note_not_allowed)',
 	'422:handoff_note_invalid':
 		'[422] The hand-off note must be 1 to 500 characters. Nothing was changed. (handoff_note_invalid)',
+};
+
+/** Codes of a plain permission refusal: these keep the generic 403 explanation. */
+const GENERIC_AUTH_CODES = new Set(['forbidden', 'insufficient_scope']);
+
+/** Extra guidance under the server's message, by code. */
+const CODE_DESCRIPTIONS: Record<string, string> = {
+	feature_disabled:
+		"The credential is valid, but this account's plan doesn't include this area. An account owner can change the plan.",
+	limit_exceeded:
+		'The account reached a plan limit. Remove unused items (for webhooks: other active trigger workflows) or upgrade the plan.',
 };
 
 export type WzContext =
@@ -287,8 +296,20 @@ export function handleApiError(this: WzContext, error: unknown): never {
 	const code = String(info.body?.error_code ?? info.body?.error ?? '');
 	const copy = ERROR_COPY[`${info.status}:${code}`];
 
+	const serverMessage = typeof info.body?.message === 'string' ? info.body.message : '';
+
 	if (copy) {
 		options.message = copy;
+	} else if (
+		/^[a-z0-9_]+$/.test(code) &&
+		!GENERIC_AUTH_CODES.has(code) &&
+		serverMessage &&
+		info.status !== 429
+	) {
+		// A coded refusal (plan area, plan limit, pipeline access, ...): the server's message is the
+		// product sentence, in the account's language.
+		options.message = `[${info.status}] ${serverMessage} (${code})`;
+		if (CODE_DESCRIPTIONS[code]) options.description = CODE_DESCRIPTIONS[code];
 	} else if (info.status === 429) {
 		options.message = 'WebzzConnect rate limit reached';
 		options.description = info.retryAfter
@@ -300,7 +321,31 @@ export function handleApiError(this: WzContext, error: unknown): never {
 		options.description =
 			'The WebzzConnect API key or access token was rejected. Check the API key (it may have been revoked), or reconnect the OAuth credential. A password change in WebzzConnect revokes OAuth connections.';
 	}
-	throw new NodeApiError(this.getNode(), error as JsonObject, options);
+	const apiError = new NodeApiError(this.getNode(), error as JsonObject, options);
+	// NodeApiError replaces a given description with the response body's `message`: keep ours.
+	if (options.description) apiError.description = options.description;
+	throw apiError;
+}
+
+/**
+ * A send answers 2xx even when WebzzConnect refused to send at once (e.g. the monthly active
+ * contacts limit): the returned message then has status `failed`. Later failures (WhatsApp's
+ * 24-hour window, delivery) arrive asynchronously and are not seen here.
+ */
+export function assertNotFailed(
+	this: WzContext,
+	message: unknown,
+	itemIndex: number,
+): void {
+	if (message === null || typeof message !== 'object') return;
+	const { status, failure_code: failureCode } = message as IDataObject;
+	if (status !== 'failed') return;
+	const code = typeof failureCode === 'string' && failureCode ? failureCode : 'failed';
+	const text =
+		code === 'monthly_active_contacts_limit_reached'
+			? "The message wasn't sent: the account reached its monthly active contacts limit. An account owner can upgrade the plan."
+			: "The message wasn't sent.";
+	throw new NodeOperationError(this.getNode(), `${text} (${code})`, { itemIndex });
 }
 
 /**
