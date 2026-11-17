@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1
+
+- **New address.** WebzzConnect moved to `https://app.webzz.io`. The nodes, both credentials (including the OAuth authorization and token URLs) and the docs links (`https://api-docs.webzz.io`) use it. Credentials created before 0.5.1 keep working: the old address still answers.
+- **Clearer errors.** When WebzzConnect refuses a call with a code, the node shows its message as `[status] message (code)`, in the account's language, instead of a generic "not allowed": the plan doesn't include an area (`feature_disabled`), a plan limit was reached (`[402] limit_exceeded`, e.g. the webhooks limit when a trigger is activated), pipeline access (`pipeline_required`, `owner_not_pipeline_member`, `owner_not_assignable`) and `[409] active_conversation_not_visible`. The generic 403 explanation stays for permission and scope refusals.
+- **A message blocked at send time fails the step.** Send Message, Conversation Create (with a message) and WhatsApp Template Send now fail with `monthly_active_contacts_limit_reached` when the account reached its monthly active contacts limit, instead of returning the failed message as a success.
+- **Paused virtual agents.** WebzzConnect no longer refuses a paused agent's connection with `agent_paused`: the calls succeed but reach only the agent's test chat. The `agent_paused` message was removed and the descriptions updated.
+- **Deals.** WebzzConnect no longer sends a deal's `source`; deal outputs and deal trigger events carry `original_source` and `created` instead. Pipeline lists and deals follow pipeline membership for person and virtual agent connections (documented under Pipelines and access). The Pipeline and Owner ID descriptions say so.
+- The node's documentation links point to the right GitHub repository. The support address is support@webzz.io.
+
 ## 0.5.0
 
 - **Virtual agents.** Credentials can act as a virtual agent (API key that acts as the agent, or OAuth with Connect as → A virtual agent). New **Connection → Get Info** shows who a credential acts as and works while the agent is paused.

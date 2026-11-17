@@ -115,7 +115,7 @@ export class WebzzConnectTrigger implements INodeType {
 			authenticationProperty,
 			{
 				displayName:
-					'With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect. Deactivate the workflow before you switch its credential.',
+					'With a virtual agent connection, keep this workflow active: it is what keeps the agent listening. While it is off, new conversations go to your team, and each conversation the agent holds goes to your team when the customer writes next. To stop the bot, pause the virtual agent in WebzzConnect (while paused, it only answers its test chat). Deactivate the workflow before you switch its credential.',
 				name: 'listeningNotice',
 				type: 'notice',
 				default: '',

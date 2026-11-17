@@ -5,8 +5,8 @@
 	"categories": ["Sales", "Communication"],
 	"resources": {
 		"credentialDocumentation": [
-			{ "url": "https://github.com/webzz/n8n-nodes-webzzconnect#credentials" }
+			{ "url": "https://github.com/WebzzConnect/n8n-nodes-webzzconnect#credentials" }
 		],
-		"primaryDocumentation": [{ "url": "https://github.com/webzz/n8n-nodes-webzzconnect#readme" }]
+		"primaryDocumentation": [{ "url": "https://github.com/WebzzConnect/n8n-nodes-webzzconnect#readme" }]
 	}
 }

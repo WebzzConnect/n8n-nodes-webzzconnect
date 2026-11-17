@@ -20,7 +20,7 @@ export class WebzzConnectOAuth2Api implements ICredentialType {
 		dark: 'file:../nodes/WebzzConnect/webzzconnect.dark.svg',
 	};
 
-	documentationUrl = 'https://api-connect.webzz.cloud';
+	documentationUrl = 'https://api-docs.webzz.io';
 
 	properties: INodeProperties[] = [
 		{
@@ -46,14 +46,14 @@ export class WebzzConnectOAuth2Api implements ICredentialType {
 			displayName: 'Authorization URL',
 			name: 'authUrl',
 			type: 'hidden',
-			default: 'https://connect.webzz.cloud/oauth/authorize',
+			default: 'https://app.webzz.io/oauth/authorize',
 			required: true,
 		},
 		{
 			displayName: 'Access Token URL',
 			name: 'accessTokenUrl',
 			type: 'hidden',
-			default: 'https://connect.webzz.cloud/oauth/token',
+			default: 'https://app.webzz.io/oauth/token',
 			required: true,
 		},
 		{
