@@ -960,7 +960,8 @@ export class WebzzConnect implements INodeType {
 						const status = this.getNodeParameter('initialStatus', i, '') as string;
 						if (status) body.status = status;
 						result = asObject(await wzApiRequest.call(this, 'POST', '/conversations', { body }));
-						assertNotFailed.call(this, firstMessage(result), i);
+						// Without a message the answer's messages[0] is an older one: nothing was sent now.
+						if (content) assertNotFailed.call(this, firstMessage(result), i);
 					} else if (operation === 'sendMessage') {
 						result = await sendConversationMessage.call(this, i);
 					} else if (operation === 'get') {

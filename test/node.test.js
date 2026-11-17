@@ -566,6 +566,8 @@ test('sends: a message WebzzConnect refused at once (status failed) fails the st
 	assert.equal((await template('sent')).out[0].id, 8);
 	assert.equal((await create('pending')).out[0].id, 8);
 	assert.equal((await script('conversation', 'create', { inboxId: '3', contactId: '9' }, () => ({ id: 8 }))).out[0].id, 8);
+	// No message sent: an older failed message returned as messages[0] is not this step's failure.
+	assert.equal((await script('conversation', 'create', { inboxId: '3', contactId: '9' }, created('failed'))).out[0].id, 8);
 });
 
 test('sends: with continueOnFail a blocked message becomes an error item', async () => {

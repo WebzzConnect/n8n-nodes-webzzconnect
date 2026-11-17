@@ -37,7 +37,7 @@ Two agents' flows can hand a conversation back and forth (A hands to B, B hands 
 
 A conversation the bot holds and the customer leaves quiet gets a nudge after 5 minutes and closes 10 minutes later (auto-closed).
 
-Use **Connection → Get Info** to see who a credential acts as (`kind`, account, virtual agent, person). While the agent is paused, its connection reaches only its test chat, so lists come back empty and customer conversations answer 404.
+Use **Connection → Get Info** to see who a credential acts as (`kind`, account, virtual agent, person). While the agent is paused, its connection reaches only its test chat.
 
 **Hand off to a person or another agent**
 
@@ -91,7 +91,7 @@ Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `nam
 **Custom API Call**
 - For an endpoint the node doesn't cover, pick **Custom API Call** in the node's actions. It opens an HTTP Request node. Set **Authentication** to *Predefined Credential Type*, choose **WebzzConnect API** (or **WebzzConnect OAuth2 API**), and call `https://app.webzz.io/api/v1/accounts/<account id>/...`.
 
-List-style operations have **Return All** and **Limit**. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect as `[status] message (code)`, in the account's language; a rate-limit error tells you how long to wait.
+List-style operations have **Return All** and **Limit**. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect, in the account's language; a refusal with a code shows as `[status] message (code)`; a rate-limit error tells you how long to wait.
 
 ## Trigger
 
@@ -121,7 +121,7 @@ The connected person or virtual agent needs access to the data behind each event
 | `[422] owner_not_pipeline_member` | The owner isn't a member of the deal's pipeline. | Choose a member, or ask an administrator to add them. |
 | `[422] pipeline_required` | No pipeline was chosen and this connection can't see the account's default pipeline. | Choose a pipeline. |
 | `[409] active_conversation_not_visible` | The customer already has a conversation on this number that this connection can't see. | Ask an administrator, or use an account key. |
-| `[403]` other (`forbidden`, `insufficient_scope`) | This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. | Check the server message in brackets. |
+| `[403]` other (`forbidden`, `insufficient_scope`, or no code) | This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. | Check the server message in brackets. |
 | `[422] assignee_not_available` | That person or virtual agent is unknown, removed, or not in the conversation's inbox. | Nothing was changed; pick another. |
 | `[422] conversation_resolved` | A virtual agent can't be assigned to a resolved conversation. | Reopen it first, or assign a person. |
 | `[422] handoff_note_not_allowed` | Only the virtual agent handling the conversation can add a hand-off note, and only when it hands the conversation to someone. | Remove the note, or use a virtual agent connection. |
