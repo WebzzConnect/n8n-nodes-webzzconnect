@@ -532,6 +532,59 @@ async function explainNoteRefusal<T>(
 	}
 }
 
+function productLineBody(fields: IDataObject): IDataObject {
+	return compact({
+		product_id: fields.productId,
+		name: typeof fields.name === 'string' ? fields.name.trim() : fields.name,
+		quantity: fields.quantity,
+		unit_price: fields.unitPrice,
+	});
+}
+
+/** Deal product lines. The server recalculates the deal value from its lines. */
+async function dealProduct(
+	this: IExecuteFunctions,
+	i: number,
+	operation: string,
+): Promise<IDataObject | IDataObject[]> {
+	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const base = `/crm/deals/${dealId}/products`;
+	if (operation === 'getProducts') return asArray(await wzApiRequest.call(this, 'GET', base));
+	if (operation === 'addProduct') {
+		const productId = String(this.getNodeParameter('productId', i, '') ?? '');
+		const fields = this.getNodeParameter('lineFields', i, {}) as IDataObject;
+		const body = productLineBody({
+			...fields,
+			productId: productId ? pathId.call(this, productId) : undefined,
+		});
+		if (!body.product_id && (!body.name || body.unit_price === undefined)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				'Choose a product, or enter a name and unit price for a custom line',
+				{ itemIndex: i },
+			);
+		}
+		if (body.quantity === undefined) body.quantity = 1;
+		return asObject(await wzApiRequest.call(this, 'POST', base, { body }));
+	}
+	const lineId = pathId.call(this, this.getNodeParameter('lineId', i));
+	if (operation === 'deleteProduct') {
+		await wzApiRequest.call(this, 'DELETE', `${base}/${lineId}`);
+		return { deleted: true, id: lineId };
+	}
+	const fields = this.getNodeParameter('lineUpdateFields', i, {}) as IDataObject;
+	const body = productLineBody({
+		...fields,
+		productId: fields.productId ? pathId.call(this, fields.productId) : undefined,
+	});
+	if (Object.keys(body).length === 0) {
+		throw new NodeOperationError(this.getNode(), 'Enter at least one field to update', {
+			itemIndex: i,
+		});
+	}
+	return asObject(await wzApiRequest.call(this, 'PATCH', `${base}/${lineId}`, { body }));
+}
+
 /** Lowercase label titles from a text field ("a, b") or a picker / expression list. */
 function labelsInput(this: IExecuteFunctions, i: number, allowEmpty = false): string[] {
 	const raw = this.getNodeParameter('labels', i, '') as unknown;
@@ -843,6 +896,17 @@ export class WebzzConnect implements INodeType {
 					.map((title) => ({ name: title, value: title }));
 			},
 
+			async getProducts(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const products = asArray(await wzApiRequest.call(this, 'GET', '/crm/products'));
+				return [
+					{ name: 'None (Custom Line)', value: '' },
+					...products.map((product) => ({
+						name: String(product.name),
+						value: String(product.id),
+					})),
+				];
+			},
+
 			async getPipelines(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const pipelines = asArray(await wzApiRequest.call(this, 'GET', '/crm/pipelines'));
 				return [
@@ -1028,6 +1092,10 @@ export class WebzzConnect implements INodeType {
 						result = asObject(await wzApiRequest.call(this, 'GET', `/crm/deals/${id}`));
 					} else if (['addNote', 'getNotes', 'updateNote', 'deleteNote'].includes(operation)) {
 						result = await dealNote.call(this, i, operation);
+					} else if (
+						['addProduct', 'getProducts', 'updateProduct', 'deleteProduct'].includes(operation)
+					) {
+						result = await dealProduct.call(this, i, operation);
 					} else if (operation === 'search') {
 						const filters = this.getNodeParameter('filters', i, {}) as IDataObject;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;

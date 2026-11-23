@@ -1200,3 +1200,59 @@ test('deal notes: a 403 on update or delete explains the note ownership rule', a
 		});
 	}
 });
+
+// --- Deal product lines (0.6.0) ---
+
+test('deal products: catalog line, custom line, update, delete and list', async () => {
+	const catalog = await runDealWith('addProduct', { dealId: '5', productId: '12', lineFields: { quantity: 2 } }, (o) => ({ id: 3, ...o.body }));
+	assert.deepEqual(summary(catalog.calls), [`POST ${D}/5/products {"product_id":"12","quantity":2}`]);
+
+	const custom = await runDealWith('addProduct', { dealId: '5', productId: '', lineFields: { name: ' Setup ', unitPrice: 0 } }, () => ({ id: 4 }));
+	assert.deepEqual(summary(custom.calls), [`POST ${D}/5/products {"name":"Setup","unit_price":0,"quantity":1}`]);
+
+	const updated = await runDealWith('updateProduct', { dealId: '5', lineId: '3', lineUpdateFields: { quantity: 3, name: '' } }, () => ({ id: 3 }));
+	assert.deepEqual(summary(updated.calls), [`PATCH ${D}/5/products/3 {"quantity":3}`]);
+
+	const deleted = await runDealWith('deleteProduct', { dealId: '5', lineId: '3' }, () => undefined);
+	assert.deepEqual(summary(deleted.calls), [`DELETE ${D}/5/products/3 null`]);
+	assert.deepEqual(deleted.items, [{ deleted: true, id: '3' }]);
+
+	const listed = await runDealWith('getProducts', { dealId: '5' }, () => [{ id: 3 }, { id: 4 }]);
+	assert.deepEqual(summary(listed.calls), [`GET ${D}/5/products null`]);
+	assert.equal(listed.items.length, 2);
+});
+
+test('deal products: refusals before any request', async () => {
+	const cases = [
+		['addProduct', { dealId: '5', productId: '', lineFields: {} }, /Choose a product/],
+		['addProduct', { dealId: '5', productId: '', lineFields: { name: 'Setup' } }, /Choose a product/],
+		['addProduct', { dealId: '5', productId: '', lineFields: { unitPrice: 10 } }, /Choose a product/],
+		['updateProduct', { dealId: '5', lineId: '3', lineUpdateFields: {} }, /at least one field/],
+		['deleteProduct', { dealId: '5', lineId: '3/../9' }, /not a valid ID/],
+		['deleteNote', { dealId: 'abc', noteId: '1' }, /not a valid ID/],
+	];
+	for (const [operation, parameters, message] of cases) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation, ...parameters }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), message);
+		assert.equal(calls.length, 0, operation);
+	}
+});
+
+test('loadOptions getProducts: catalog from /crm/products with a None option', async () => {
+	const calls = [];
+	const ctx = {
+		getNode: () => node,
+		getNodeParameter: (name, fallback) => (name === 'authentication' ? 'oAuth2' : fallback),
+		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
+		helpers: {
+			httpRequestWithAuthentication: async (credential, options) => {
+				calls.push(`${options.method} ${options.url}`);
+				return [{ id: 12, name: 'Pro plan' }];
+			},
+		},
+	};
+	const options = await new WebzzConnect().methods.loadOptions.getProducts.call(ctx);
+	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/crm/products`]);
+	assert.deepEqual(options, [{ name: 'None (Custom Line)', value: '' }, { name: 'Pro plan', value: '12' }]);
+});

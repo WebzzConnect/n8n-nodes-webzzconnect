@@ -17,6 +17,12 @@ export const dealOperations: INodeProperties[] = [
 				action: 'Add a note to a deal',
 			},
 			{
+				name: 'Add Product',
+				value: 'addProduct',
+				description: 'Add a product line to a deal; the deal value becomes the sum of its lines',
+				action: 'Add a product line to a deal',
+			},
+			{
 				name: 'Create',
 				value: 'create',
 				description: 'Create a deal',
@@ -28,12 +34,24 @@ export const dealOperations: INodeProperties[] = [
 				description: 'Delete a note of a deal',
 				action: 'Delete a note of a deal',
 			},
+			{
+				name: 'Delete Product',
+				value: 'deleteProduct',
+				description: 'Remove a product line from a deal',
+				action: 'Remove a product line from a deal',
+			},
 			{ name: 'Get', value: 'get', description: 'Get a deal by ID', action: 'Get a deal' },
 			{
 				name: 'Get Notes',
 				value: 'getNotes',
 				description: 'List the notes of a deal, newest first',
 				action: 'Get the notes of a deal',
+			},
+			{
+				name: 'Get Products',
+				value: 'getProducts',
+				description: 'List the product lines of a deal',
+				action: 'Get the product lines of a deal',
 			},
 			{
 				name: 'Move Stage',
@@ -58,6 +76,12 @@ export const dealOperations: INodeProperties[] = [
 				value: 'updateNote',
 				description: 'Change the text of a note of a deal',
 				action: 'Update a note of a deal',
+			},
+			{
+				name: 'Update Product',
+				value: 'updateProduct',
+				description: 'Change a product line of a deal; the deal value is recalculated',
+				action: 'Update a product line of a deal',
 			},
 		],
 		default: 'create',
@@ -150,7 +174,14 @@ export const dealFields: INodeProperties[] = [
 				description:
 					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
 			},
-			{ displayName: 'Value', name: 'value', type: 'number', default: 0 },
+			{
+				displayName: 'Value',
+				name: 'value',
+				type: 'number',
+				default: 0,
+				description:
+					'Ignored once the deal has product lines: the value is then the sum of its lines',
+			},
 		],
 	},
 
@@ -162,7 +193,19 @@ export const dealFields: INodeProperties[] = [
 		required: true,
 		default: '',
 		displayOptions: {
-			show: show(['get', 'update', 'moveStage', 'addNote', 'getNotes', 'updateNote', 'deleteNote']),
+			show: show([
+				'get',
+				'update',
+				'moveStage',
+				'addNote',
+				'getNotes',
+				'updateNote',
+				'deleteNote',
+				'addProduct',
+				'getProducts',
+				'updateProduct',
+				'deleteProduct',
+			]),
 		},
 	},
 	{
@@ -184,6 +227,95 @@ export const dealFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['addNote', 'updateNote']) },
 		description: 'The note text, up to 10,000 characters',
+	},
+
+	// product lines
+	{
+		displayName: 'Product Line ID',
+		name: 'lineId',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: { show: show(['updateProduct', 'deleteProduct']) },
+		description: 'The ID of the line on the deal (from Get Products), not the catalog product ID',
+	},
+	{
+		displayName: 'Product Name or ID',
+		name: 'productId',
+		type: 'options',
+		typeOptions: { loadOptionsMethod: 'getProducts' },
+		default: '',
+		displayOptions: { show: show(['addProduct']) },
+		description:
+			'A product from your catalog; its name and price are used unless you set them below. Leave as None for a custom line with a name and unit price. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+	{
+		displayName: 'Line Fields',
+		name: 'lineFields',
+		type: 'collection',
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: { show: show(['addProduct']) },
+		options: [
+			{
+				displayName: 'Name',
+				name: 'name',
+				type: 'string',
+				default: '',
+				description: 'Required for a custom line',
+			},
+			{
+				displayName: 'Quantity',
+				name: 'quantity',
+				type: 'number',
+				typeOptions: { minValue: 0, numberPrecision: 2 },
+				default: 1,
+				description: 'More than 0. Default 1.',
+			},
+			{
+				displayName: 'Unit Price',
+				name: 'unitPrice',
+				type: 'number',
+				typeOptions: { minValue: 0, numberPrecision: 2 },
+				default: 0,
+				description: 'Required for a custom line. The line takes the deal currency.',
+			},
+		],
+	},
+	{
+		displayName: 'Update Fields',
+		name: 'lineUpdateFields',
+		type: 'collection',
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: { show: show(['updateProduct']) },
+		options: [
+			{ displayName: 'Name', name: 'name', type: 'string', default: '' },
+			{
+				displayName: 'Product Name or ID',
+				name: 'productId',
+				type: 'options',
+				typeOptions: { loadOptionsMethod: 'getProducts' },
+				default: '',
+				description:
+					'Link the line to another catalog product. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			},
+			{
+				displayName: 'Quantity',
+				name: 'quantity',
+				type: 'number',
+				typeOptions: { minValue: 0, numberPrecision: 2 },
+				default: 1,
+				description: 'More than 0',
+			},
+			{
+				displayName: 'Unit Price',
+				name: 'unitPrice',
+				type: 'number',
+				typeOptions: { minValue: 0, numberPrecision: 2 },
+				default: 0,
+			},
+		],
 	},
 	{
 		displayName: 'Update Fields',
@@ -228,7 +360,14 @@ export const dealFields: INodeProperties[] = [
 					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
 			},
 			{ displayName: 'Title', name: 'title', type: 'string', default: '' },
-			{ displayName: 'Value', name: 'value', type: 'number', default: 0 },
+			{
+				displayName: 'Value',
+				name: 'value',
+				type: 'number',
+				default: 0,
+				description:
+					'Ignored once the deal has product lines: the value is then the sum of its lines',
+			},
 		],
 	},
 
