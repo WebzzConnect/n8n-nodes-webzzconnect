@@ -1139,3 +1139,46 @@ test('conversation setLabels: Clear All Labels must be a real true', async () =>
 	}
 	assert.equal(new WebzzConnect().description.defaultVersion, 1.1);
 });
+
+// --- Deal notes (0.6.0) ---
+
+async function runDealWith(operation, parameters, respond) {
+	const calls = [];
+	const ctx = execContext({ parameters: { resource: 'deal', operation, ...parameters }, calls });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body });
+		return respond ? respond(options) : {};
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, items: out[0].map((item) => item.json) };
+}
+
+const D = `${BASE}/api/v1/accounts/7/crm/deals`;
+
+test('deal notes: add, list, update and delete hit /crm/deals/:id/notes', async () => {
+	const added = await runDealWith('addNote', { dealId: '5', content: 'Called, wants a quote' }, (o) => ({ id: 9, content: o.body.content }));
+	assert.deepEqual(summary(added.calls), [`POST ${D}/5/notes {"content":"Called, wants a quote"}`]);
+	assert.deepEqual(added.items, [{ id: 9, content: 'Called, wants a quote' }]);
+
+	const listed = await runDealWith('getNotes', { dealId: '5' }, () => [{ id: 9 }, { id: 8 }]);
+	assert.deepEqual(summary(listed.calls), [`GET ${D}/5/notes null`]);
+	assert.deepEqual(listed.items, [{ id: 9 }, { id: 8 }]);
+
+	const updated = await runDealWith('updateNote', { dealId: '5', noteId: '9', content: 'Quote sent' }, (o) => ({ id: 9, content: o.body.content, edited: true }));
+	assert.deepEqual(summary(updated.calls), [`PATCH ${D}/5/notes/9 {"content":"Quote sent"}`]);
+
+	const deleted = await runDealWith('deleteNote', { dealId: '5', noteId: '9' }, () => undefined);
+	assert.deepEqual(summary(deleted.calls), [`DELETE ${D}/5/notes/9 null`]);
+	assert.deepEqual(deleted.items, [{ deleted: true, id: '9' }]);
+});
+
+test('deal notes: empty or too long text is refused before any request', async () => {
+	for (const content of ['', '   ', 'x'.repeat(10001)]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation: 'addNote', dealId: '5', content }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /note text|limit is 10000/);
+		assert.equal(calls.length, 0);
+	}
+	const ok = await runDealWith('addNote', { dealId: '5', content: 'x'.repeat(10000) }, () => ({ id: 1 }));
+	assert.equal(ok.calls.length, 1);
+});

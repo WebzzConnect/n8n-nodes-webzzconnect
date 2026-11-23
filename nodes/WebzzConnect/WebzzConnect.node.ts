@@ -475,6 +475,42 @@ async function setCustomAttributes(this: IExecuteFunctions, i: number): Promise<
 	return asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
 }
 
+const NOTE_MAX_LENGTH = 10000;
+
+/** Deal notes: add, list, change or delete (only the note's author or an administrator may change it). */
+async function dealNote(
+	this: IExecuteFunctions,
+	i: number,
+	operation: string,
+): Promise<IDataObject | IDataObject[]> {
+	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const base = `/crm/deals/${dealId}/notes`;
+	if (operation === 'getNotes') return asArray(await wzApiRequest.call(this, 'GET', base));
+	if (operation === 'deleteNote') {
+		const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+		await wzApiRequest.call(this, 'DELETE', `${base}/${noteId}`);
+		return { deleted: true, id: noteId };
+	}
+	const content = String(this.getNodeParameter('content', i, '') ?? '');
+	if (!content.trim()) {
+		throw new NodeOperationError(this.getNode(), 'Enter the note text', { itemIndex: i });
+	}
+	if (content.length > NOTE_MAX_LENGTH) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`The note is ${content.length} characters; the limit is ${NOTE_MAX_LENGTH}`,
+			{ itemIndex: i },
+		);
+	}
+	if (operation === 'addNote') {
+		return asObject(await wzApiRequest.call(this, 'POST', base, { body: { content } }));
+	}
+	const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+	return asObject(
+		await wzApiRequest.call(this, 'PATCH', `${base}/${noteId}`, { body: { content } }),
+	);
+}
+
 /** Lowercase label titles from a text field ("a, b") or a picker / expression list. */
 function labelsInput(this: IExecuteFunctions, i: number, allowEmpty = false): string[] {
 	const raw = this.getNodeParameter('labels', i, '') as unknown;
@@ -969,6 +1005,8 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'get') {
 						const id = pathId.call(this, this.getNodeParameter('dealId', i));
 						result = asObject(await wzApiRequest.call(this, 'GET', `/crm/deals/${id}`));
+					} else if (['addNote', 'getNotes', 'updateNote', 'deleteNote'].includes(operation)) {
+						result = await dealNote.call(this, i, operation);
 					} else if (operation === 'search') {
 						const filters = this.getNodeParameter('filters', i, {}) as IDataObject;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;

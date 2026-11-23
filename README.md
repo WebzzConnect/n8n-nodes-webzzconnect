@@ -67,6 +67,7 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Move Stage (including won and lost, with an optional lost reason and note)
 - Get
 - Search (query, contact, pipeline, stage, owner, status)
+- Add Note, Get Notes, Update Note, Delete Note (deal notes also show on the contact's notes). Only the connection or person that wrote a note, or an administrator, can change or delete it; a note written through an API key belongs to that key.
 
 Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `name`, `ad`: where the lead came from) and `created` (`kind`, `by`: how the deal was made). The older `source` field is no longer sent by WebzzConnect; workflows that read `$json.source` should read `original_source` instead.
 

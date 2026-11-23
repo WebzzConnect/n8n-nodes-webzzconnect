@@ -11,12 +11,30 @@ export const dealOperations: INodeProperties[] = [
 		displayOptions: { show: { resource: ['deal'] } },
 		options: [
 			{
+				name: 'Add Note',
+				value: 'addNote',
+				description: 'Add a note to a deal (also shown on the contact notes)',
+				action: 'Add a note to a deal',
+			},
+			{
 				name: 'Create',
 				value: 'create',
 				description: 'Create a deal',
 				action: 'Create a deal',
 			},
+			{
+				name: 'Delete Note',
+				value: 'deleteNote',
+				description: 'Delete a note of a deal',
+				action: 'Delete a note of a deal',
+			},
 			{ name: 'Get', value: 'get', description: 'Get a deal by ID', action: 'Get a deal' },
+			{
+				name: 'Get Notes',
+				value: 'getNotes',
+				description: 'List the notes of a deal, newest first',
+				action: 'Get the notes of a deal',
+			},
 			{
 				name: 'Move Stage',
 				value: 'moveStage',
@@ -34,6 +52,12 @@ export const dealOperations: INodeProperties[] = [
 				value: 'update',
 				description: 'Update a deal',
 				action: 'Update a deal',
+			},
+			{
+				name: 'Update Note',
+				value: 'updateNote',
+				description: 'Change the text of a note of a deal',
+				action: 'Update a note of a deal',
 			},
 		],
 		default: 'create',
@@ -130,14 +154,36 @@ export const dealFields: INodeProperties[] = [
 		],
 	},
 
-	// get, update, moveStage
+	// get, update, moveStage, notes
 	{
 		displayName: 'Deal ID',
 		name: 'dealId',
 		type: 'string',
 		required: true,
 		default: '',
-		displayOptions: { show: show(['get', 'update', 'moveStage']) },
+		displayOptions: {
+			show: show(['get', 'update', 'moveStage', 'addNote', 'getNotes', 'updateNote', 'deleteNote']),
+		},
+	},
+	{
+		displayName: 'Note ID',
+		name: 'noteId',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: { show: show(['updateNote', 'deleteNote']) },
+		description:
+			'Only the connection or person that wrote the note, or an administrator, can change it. A note written through an API key belongs to that key.',
+	},
+	{
+		displayName: 'Note',
+		name: 'content',
+		type: 'string',
+		typeOptions: { rows: 4 },
+		required: true,
+		default: '',
+		displayOptions: { show: show(['addNote', 'updateNote']) },
+		description: 'The note text, up to 10,000 characters',
 	},
 	{
 		displayName: 'Update Fields',
