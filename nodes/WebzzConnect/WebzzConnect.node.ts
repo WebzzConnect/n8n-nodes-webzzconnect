@@ -475,22 +475,46 @@ async function setCustomAttributes(this: IExecuteFunctions, i: number): Promise<
 	return asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
 }
 
-/** Union with the current labels: the endpoint replaces the whole list. */
-async function addLabels(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+/** Lowercase label titles from a text field ("a, b") or a picker / expression list. */
+function labelsInput(this: IExecuteFunctions, i: number, allowEmpty = false): string[] {
+	const raw = this.getNodeParameter('labels', i, '') as unknown;
+	const parts = (Array.isArray(raw) ? raw : [raw]).flatMap((value) =>
+		value === null || value === undefined ? [] : String(value).split(','),
+	);
 	// Label titles are lowercase on the server.
-	const wanted = String(this.getNodeParameter('labels', i, '') ?? '')
-		.split(',')
-		.map((label) => label.trim().toLowerCase())
-		.filter((label) => label.length > 0);
-	if (wanted.length === 0) {
+	const labels = [
+		...new Set(parts.map((label) => label.trim().toLowerCase()).filter((label) => label)),
+	];
+	if (labels.length === 0 && !allowEmpty) {
 		throw new NodeOperationError(this.getNode(), 'Enter at least one label', { itemIndex: i });
 	}
-	const current = asArray(
-		await wzApiRequest.call(this, 'GET', `/conversations/${id}/labels`),
-	) as unknown as string[];
-	const labels = [...new Set([...current.map(String), ...wanted])];
-	const response = await wzApiRequest.call(this, 'POST', `/conversations/${id}/labels`, {
+	return labels;
+}
+
+type LabelMode = 'add' | 'remove' | 'set';
+
+/** The label endpoints replace the whole list, so add and remove read the current labels first. */
+async function changeLabels(
+	this: IExecuteFunctions,
+	i: number,
+	kind: 'contacts' | 'conversations',
+	mode: LabelMode,
+): Promise<IDataObject> {
+	const idParam = kind === 'contacts' ? 'contactId' : 'conversationId';
+	const id = pathId.call(this, this.getNodeParameter(idParam, i));
+	const clearAll = mode === 'set' && (this.getNodeParameter('clearAll', i, false) as boolean);
+	const wanted = clearAll ? [] : labelsInput.call(this, i);
+	let labels = wanted;
+	if (mode !== 'set') {
+		const current = asArray(
+			await wzApiRequest.call(this, 'GET', `/${kind}/${id}/labels`),
+		).map(String);
+		labels =
+			mode === 'add'
+				? [...new Set([...current, ...wanted])]
+				: current.filter((label) => !wanted.includes(label.toLowerCase()));
+	}
+	const response = await wzApiRequest.call(this, 'POST', `/${kind}/${id}/labels`, {
 		body: { labels },
 	});
 	return { labels: asArray(response) as unknown as string[] };
@@ -676,7 +700,8 @@ export class WebzzConnect implements INodeType {
 		name: 'webzzConnect',
 		icon: { light: 'file:webzzconnect.svg', dark: 'file:webzzconnect.dark.svg' },
 		group: ['transform'],
-		version: [1],
+		// 1.1: label fields pick from the account's labels; version 1 keeps the text field.
+		version: [1, 1.1],
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description: 'Work with contacts, deals, conversations and WhatsApp templates in WebzzConnect',
 		defaults: { name: 'WebzzConnect' },
@@ -751,6 +776,14 @@ export class WebzzConnect implements INodeType {
 		},
 
 		loadOptions: {
+			async getLabels(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const labels = asArray(await wzApiRequest.call(this, 'GET', '/labels'));
+				return labels
+					.map((label) => String(label.title))
+					.sort((a, b) => a.localeCompare(b))
+					.map((title) => ({ name: title, value: title }));
+			},
+
 			async getPipelines(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const pipelines = asArray(await wzApiRequest.call(this, 'GET', '/crm/pipelines'));
 				return [
@@ -879,6 +912,10 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'get') {
 						const id = pathId.call(this, this.getNodeParameter('contactId', i));
 						result = unwrapContact(await wzApiRequest.call(this, 'GET', `/contacts/${id}`));
+					} else if (operation === 'addLabels') {
+						result = await changeLabels.call(this, i, 'contacts', 'add');
+					} else if (operation === 'removeLabels') {
+						result = await changeLabels.call(this, i, 'contacts', 'remove');
 					} else if (operation === 'search') {
 						const query = this.getNodeParameter('query', i) as string;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;
@@ -976,7 +1013,11 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'setCustomAttributes') {
 						result = await setCustomAttributes.call(this, i);
 					} else if (operation === 'addLabels') {
-						result = await addLabels.call(this, i);
+						result = await changeLabels.call(this, i, 'conversations', 'add');
+					} else if (operation === 'removeLabels') {
+						result = await changeLabels.call(this, i, 'conversations', 'remove');
+					} else if (operation === 'setLabels') {
+						result = await changeLabels.call(this, i, 'conversations', 'set');
 					} else if (operation === 'getAll') {
 						const filters = this.getNodeParameter('filters', i, {}) as IDataObject;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;

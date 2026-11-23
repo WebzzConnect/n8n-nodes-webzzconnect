@@ -1,5 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
+import { labelFields } from './LabelFields';
+
 const show = (operations: string[]) => ({ resource: ['conversation'], operation: operations });
 const showType = (types: string[]) => ({ ...show(['sendMessage']), messageType: types });
 const INTERACTIVE = ['button', 'list', 'cta_url'];
@@ -49,6 +51,12 @@ export const conversationOperations: INodeProperties[] = [
 				action: 'Get many conversations',
 			},
 			{
+				name: 'Remove Labels',
+				value: 'removeLabels',
+				description: 'Remove labels from a conversation, keeping its other labels',
+				action: 'Remove labels from a conversation',
+			},
+			{
 				name: 'Send Message',
 				value: 'sendMessage',
 				description:
@@ -60,6 +68,12 @@ export const conversationOperations: INodeProperties[] = [
 				value: 'setCustomAttributes',
 				description: 'Set custom attributes on a conversation, keeping the other attributes',
 				action: 'Set custom attributes on a conversation',
+			},
+			{
+				name: 'Set Labels',
+				value: 'setLabels',
+				description: 'Replace all labels of a conversation',
+				action: 'Set the labels of a conversation',
 			},
 			{
 				name: 'Unassign',
@@ -139,6 +153,8 @@ export const conversationFields: INodeProperties[] = [
 				'updateStatus',
 				'setCustomAttributes',
 				'addLabels',
+				'removeLabels',
+				'setLabels',
 			]),
 		},
 		description: 'The conversation number shown in WebzzConnect',
@@ -394,26 +410,27 @@ export const conversationFields: INodeProperties[] = [
 		],
 	},
 
-	// addLabels
+	// addLabels, removeLabels, setLabels
 	{
 		displayName:
 			'Needs an API key (or OAuth consent) with the conversations view and reply permissions',
 		name: 'addLabelsNotice',
 		type: 'notice',
 		default: '',
-		displayOptions: { show: show(['addLabels']) },
+		displayOptions: { show: show(['addLabels', 'removeLabels', 'setLabels']) },
 	},
+	...labelFields('conversation', 'addLabels'),
+	...labelFields('conversation', 'removeLabels'),
 	{
-		displayName: 'Labels',
-		name: 'labels',
-		type: 'string',
-		required: true,
-		default: '',
-		placeholder: 'vip, hot-lead',
-		displayOptions: { show: show(['addLabels']) },
+		displayName: 'Clear All Labels',
+		name: 'clearAll',
+		type: 'boolean',
+		default: false,
+		displayOptions: { show: show(['setLabels']) },
 		description:
-			'Comma-separated labels to add (sent in lowercase). Labels the conversation already has are kept.',
+			'Whether to remove every label from the conversation. Without this, an empty label list is refused, so an empty expression never clears labels by mistake.',
 	},
+	...labelFields('conversation', 'setLabels', { clearAll: [false] }),
 
 	// assign
 	{

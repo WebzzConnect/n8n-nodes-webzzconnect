@@ -1047,3 +1047,85 @@ test('example: the sales flow has the virtual agent gate, no human label and no 
 	assert.ok(handOff.parameters.handoffNote);
 	assert.ok(flow.connections['Mine to answer?'] && flow.connections['Who am I']);
 });
+
+// --- Labels on contacts and conversations, label picker (0.6.0) ---
+
+async function runLabels(resource, operation, parameters, current = []) {
+	const calls = [];
+	const ctx = execContext({ parameters: { resource, operation, ...parameters }, calls });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body });
+		return options.method === 'GET' ? { payload: current } : { payload: options.body.labels };
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, out };
+}
+
+const CT = `${BASE}/api/v1/accounts/7/contacts`;
+
+test('contact addLabels: union, lowercased and deduped, from a picker list', async () => {
+	const { calls, out } = await runLabels('contact', 'addLabels', { contactId: '3', labels: ['b', 'B', ' a '] }, ['a']);
+	assert.deepEqual(summary(calls), [`GET ${CT}/3/labels null`, `POST ${CT}/3/labels {"labels":["a","b"]}`]);
+	assert.deepEqual(out[0][0].json, { labels: ['a', 'b'] });
+});
+
+test('contact removeLabels: missing labels are ignored, case-insensitive', async () => {
+	const { calls } = await runLabels('contact', 'removeLabels', { contactId: '3', labels: 'A, z' }, ['a', 'b']);
+	assert.deepEqual(summary(calls), [`GET ${CT}/3/labels null`, `POST ${CT}/3/labels {"labels":["b"]}`]);
+});
+
+test('conversation setLabels: one POST with the list, no read', async () => {
+	const { calls } = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: ['C'] }, ['a']);
+	assert.deepEqual(summary(calls), [`POST ${C}/4/labels {"labels":["c"]}`]);
+});
+
+test('conversation setLabels: clears only with Clear All Labels; an empty list is refused', async () => {
+	const cleared = await runLabels('conversation', 'setLabels', { conversationId: '4', clearAll: true, labels: ['ignored'] });
+	assert.deepEqual(summary(cleared.calls), [`POST ${C}/4/labels {"labels":[]}`]);
+	for (const labels of ['', [], [' ', ',']]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'conversation', operation: 'setLabels', conversationId: '4', clearAll: false, labels }, calls });
+		ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+			calls.push(options);
+			return {};
+		};
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /Enter at least one label/);
+		assert.equal(calls.length, 0);
+	}
+});
+
+test('conversation removeLabels and the empty addLabels refusal', async () => {
+	const { calls } = await runLabels('conversation', 'removeLabels', { conversationId: '4', labels: ['b'] }, ['a', 'b']);
+	assert.deepEqual(summary(calls), [`GET ${C}/4/labels null`, `POST ${C}/4/labels {"labels":["a"]}`]);
+	await assert.rejects(runLabels('conversation', 'addLabels', { conversationId: '4', labels: [] }), /Enter at least one label/);
+});
+
+test('labels: v1 text and v1.1 list give the same normalized titles', async () => {
+	const text = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: 'vip, hot-lead' });
+	const list = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: ['VIP', ' vip ', 'x'] });
+	assert.equal(text.calls[0].body.labels.join(), 'vip,hot-lead');
+	assert.equal(list.calls[0].body.labels.join(), 'vip,x');
+});
+
+test('loadOptions getLabels: titles from /labels, sorted; node is version 1 and 1.1', async () => {
+	const calls = [];
+	const ctx = {
+		getNode: () => node,
+		getNodeParameter: (name, fallback) => (name === 'authentication' ? 'oAuth2' : fallback),
+		getCurrentNodeParameter: () => undefined,
+		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
+		helpers: {
+			httpRequestWithAuthentication: async (credential, options) => {
+				calls.push(`${options.method} ${options.url}`);
+				return { payload: [{ id: 2, title: 'vip' }, { id: 1, title: 'hot-lead' }] };
+			},
+		},
+	};
+	const options = await new WebzzConnect().methods.loadOptions.getLabels.call(ctx);
+	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/labels`]);
+	assert.deepEqual(options, [{ name: 'hot-lead', value: 'hot-lead' }, { name: 'vip', value: 'vip' }]);
+	assert.deepEqual(new WebzzConnect().description.version, [1, 1.1]);
+	const labelProps = new WebzzConnect().description.properties.filter((p) => p.name === 'labels');
+	assert.ok(labelProps.some((p) => p.type === 'string' && p.displayOptions.show['@version'][0] === 1));
+	assert.ok(labelProps.some((p) => p.type === 'multiOptions' && p.displayOptions.hide['@version'][0] === 1));
+});
