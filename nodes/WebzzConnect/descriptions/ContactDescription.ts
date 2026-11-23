@@ -1,5 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
+import { labelFields } from './LabelFields';
+
 const show = (operations: string[]) => ({ resource: ['contact'], operation: operations });
 
 export const contactOperations: INodeProperties[] = [
@@ -10,6 +12,12 @@ export const contactOperations: INodeProperties[] = [
 		noDataExpression: true,
 		displayOptions: { show: { resource: ['contact'] } },
 		options: [
+			{
+				name: 'Add Labels',
+				value: 'addLabels',
+				description: 'Add labels to a contact, keeping the labels it already has',
+				action: 'Add labels to a contact',
+			},
 			{
 				name: 'Create',
 				value: 'create',
@@ -23,6 +31,12 @@ export const contactOperations: INodeProperties[] = [
 				action: 'Create or update a contact',
 			},
 			{ name: 'Get', value: 'get', description: 'Get a contact by ID', action: 'Get a contact' },
+			{
+				name: 'Remove Labels',
+				value: 'removeLabels',
+				description: 'Remove labels from a contact, keeping its other labels',
+				action: 'Remove labels from a contact',
+			},
 			{
 				name: 'Search',
 				value: 'search',
@@ -139,7 +153,7 @@ export const contactFields: INodeProperties[] = [
 		type: 'string',
 		required: true,
 		default: '',
-		displayOptions: { show: show(['get', 'update']) },
+		displayOptions: { show: show(['get', 'update', 'addLabels', 'removeLabels']) },
 	},
 	{
 		displayName: 'Update Fields',
@@ -189,4 +203,15 @@ export const contactFields: INodeProperties[] = [
 		displayOptions: { show: { ...show(['search']), returnAll: [false] } },
 		description: 'Max number of results to return',
 	},
+
+	// addLabels, removeLabels
+	{
+		displayName: 'Needs an API key (or OAuth consent) with the contacts view and edit permissions',
+		name: 'contactLabelsNotice',
+		type: 'notice',
+		default: '',
+		displayOptions: { show: show(['addLabels', 'removeLabels']) },
+	},
+	...labelFields('contact', 'addLabels'),
+	...labelFields('contact', 'removeLabels'),
 ];

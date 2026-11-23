@@ -59,6 +59,7 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Get
 - Search (by name, email or phone)
 - Create or Update: finds an existing contact by exact email or by phone number (national formats such as `050-1234567` match the stored international number), updates it, or creates a new one. Running it twice with the same data never creates a duplicate.
+- Add Labels / Remove Labels (the contact keeps its other labels; needs the contacts view and edit permissions)
 
 **Deal**
 - Create (pick the pipeline and stage from your own lists)
@@ -66,6 +67,8 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Move Stage (including won and lost, with an optional lost reason and note)
 - Get
 - Search (query, contact, pipeline, stage, owner, status)
+- Add Product, Get Products, Update Product, Delete Product (deal product lines: pick a product from your catalog, or enter a custom line with a name and unit price; Quantity defaults to 1). Once a deal has product lines, its value is the sum of its lines and the Value field in Create and Update is ignored. Removing the last line keeps the last total.
+- Add Note, Get Notes, Update Note, Delete Note (deal notes also show on the contact's notes). Only the connection or person that wrote a note, or an administrator, can change or delete it; a note written through an API key belongs to that key.
 
 Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `name`, `ad`: where the lead came from) and `created` (`kind`, `by`: how the deal was made). The older `source` field is no longer sent by WebzzConnect; workflows that read `$json.source` should read `original_source` instead.
 
@@ -75,12 +78,14 @@ Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `nam
 - Create (with an optional first message and an optional Status). With a virtual agent connection, a new conversation is handled by that agent, so the customer's reply comes to your flow. A virtual agent can send only into conversations it handles: for reminders and broadcasts, use an account key or an "as me" connection.
 - Send Message (reply, or add a private note; optionally attach a file by public URL, with the text as a caption). **Message Type** also offers WhatsApp interactive messages: **Reply Buttons** (up to 3), **List** (up to 10 rows with optional descriptions and sections, and a menu label) and **Link Button** (one button that opens a URL), each with an optional header (text, or image / video / document by URL; a list only takes text) and footer. The message text is the body and is required. Each button or row has an ID (the title if left empty) that comes back as `button_payload` when the contact taps it. Interactive messages need a WhatsApp Cloud inbox and the 24-hour window; WebzzConnect checks WhatsApp's limits and answers with a clear message.
 - Set Custom Attributes (key / value pairs, merged into the conversation's existing attributes; needs the conversations view and resolve permissions)
-- Add Labels (comma-separated, sent in lowercase, added to the conversation's existing labels; needs the conversations view and reply permissions)
+- Add Labels / Remove Labels (the conversation keeps its other labels) and Set Labels (replaces all its labels; to remove every label, turn on **Clear All Labels**, since an empty list is refused). Needs the conversations view and reply permissions.
 - Get
 - Get Many (by status, inbox and virtual agent; statuses include With a Virtual Agent, Waiting on Customer and Pending (Both). With a virtual agent connection, Open finds none)
 - Assign (a person or a virtual agent in the conversation's inbox, and/or a team, with an optional hand-off note; an unknown or unavailable one is refused and nothing changes)
 - Unassign (agent, team, or both, with an optional hand-off note)
 - Update Status (Open, Resolved, Snoozed with an optional Snooze Until, or Waiting on Customer). Resolved sends the CSAT survey when the inbox has CSAT on. Open through an "as me" connection of an agent-role user also assigns the conversation to that user.
+
+**Labels.** Labels are picked from your account's labels, or given by an expression (a list, or comma-separated text), and sent in lowercase. Workflows made before 0.6.0 (node version 1) keep their comma-separated Labels text field.
 
 **Connection**
 - Get Info (who this credential acts as)

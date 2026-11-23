@@ -8,7 +8,7 @@ import type {
 	INodeTypeDescription,
 	ResourceMapperFields,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { contactFields, contactOperations } from './descriptions/ContactDescription';
 import { conversationFields, conversationOperations } from './descriptions/ConversationDescription';
@@ -475,22 +475,157 @@ async function setCustomAttributes(this: IExecuteFunctions, i: number): Promise<
 	return asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
 }
 
-/** Union with the current labels: the endpoint replaces the whole list. */
-async function addLabels(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+const NOTE_MAX_LENGTH = 10000;
+
+/** Deal notes: add, list, change or delete (only the note's author or an administrator may change it). */
+async function dealNote(
+	this: IExecuteFunctions,
+	i: number,
+	operation: string,
+): Promise<IDataObject | IDataObject[]> {
+	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const base = `/crm/deals/${dealId}/notes`;
+	if (operation === 'getNotes') return asArray(await wzApiRequest.call(this, 'GET', base));
+	if (operation === 'deleteNote') {
+		const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+		await explainNoteRefusal.call(this, i, wzApiRequest.call(this, 'DELETE', `${base}/${noteId}`));
+		return { deleted: true, id: noteId };
+	}
+	const content = String(this.getNodeParameter('content', i, '') ?? '');
+	if (!content.trim()) {
+		throw new NodeOperationError(this.getNode(), 'Enter the note text', { itemIndex: i });
+	}
+	if (content.length > NOTE_MAX_LENGTH) {
+		throw new NodeOperationError(
+			this.getNode(),
+			`The note is ${content.length} characters; the limit is ${NOTE_MAX_LENGTH}`,
+			{ itemIndex: i },
+		);
+	}
+	if (operation === 'addNote') {
+		return asObject(await wzApiRequest.call(this, 'POST', base, { body: { content } }));
+	}
+	const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+	return asObject(
+		await explainNoteRefusal.call(
+			this,
+			i,
+			wzApiRequest.call(this, 'PATCH', `${base}/${noteId}`, { body: { content } }),
+		),
+	);
+}
+
+/** A 403 on someone else's note reads as a scope problem in the generic text: name the ownership rule. */
+async function explainNoteRefusal<T>(
+	this: IExecuteFunctions,
+	i: number,
+	request: Promise<T>,
+): Promise<T> {
+	try {
+		return await request;
+	} catch (error) {
+		if (error instanceof NodeApiError && String(error.httpCode) === '403') {
+			error.description =
+				'A note can be changed or deleted only by the connection or person that wrote it, or by an administrator. A note written through an API key belongs to that key. This refusal also happens when the connection lacks the deals edit permission.';
+		}
+		throw errorForItem(this.getNode(), error, i);
+	}
+}
+
+function productLineBody(fields: IDataObject): IDataObject {
+	return compact({
+		product_id: fields.productId,
+		name: typeof fields.name === 'string' ? fields.name.trim() : fields.name,
+		quantity: fields.quantity,
+		unit_price: fields.unitPrice,
+	});
+}
+
+/** Deal product lines. The server recalculates the deal value from its lines. */
+async function dealProduct(
+	this: IExecuteFunctions,
+	i: number,
+	operation: string,
+): Promise<IDataObject | IDataObject[]> {
+	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const base = `/crm/deals/${dealId}/products`;
+	if (operation === 'getProducts') return asArray(await wzApiRequest.call(this, 'GET', base));
+	if (operation === 'addProduct') {
+		const productId = String(this.getNodeParameter('productId', i, '') ?? '');
+		const fields = this.getNodeParameter('lineFields', i, {}) as IDataObject;
+		const body = productLineBody({
+			...fields,
+			productId: productId ? pathId.call(this, productId) : undefined,
+		});
+		if (!body.product_id && (!body.name || body.unit_price === undefined)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				'Choose a product, or enter a name and unit price for a custom line',
+				{ itemIndex: i },
+			);
+		}
+		if (body.quantity === undefined) body.quantity = 1;
+		return asObject(await wzApiRequest.call(this, 'POST', base, { body }));
+	}
+	const lineId = pathId.call(this, this.getNodeParameter('lineId', i));
+	if (operation === 'deleteProduct') {
+		await wzApiRequest.call(this, 'DELETE', `${base}/${lineId}`);
+		return { deleted: true, id: lineId };
+	}
+	const fields = this.getNodeParameter('lineUpdateFields', i, {}) as IDataObject;
+	const body = productLineBody({
+		...fields,
+		productId: fields.productId ? pathId.call(this, fields.productId) : undefined,
+	});
+	if (Object.keys(body).length === 0) {
+		throw new NodeOperationError(this.getNode(), 'Enter at least one field to update', {
+			itemIndex: i,
+		});
+	}
+	return asObject(await wzApiRequest.call(this, 'PATCH', `${base}/${lineId}`, { body }));
+}
+
+/** Lowercase label titles from a text field ("a, b") or a picker / expression list. */
+function labelsInput(this: IExecuteFunctions, i: number, allowEmpty = false): string[] {
+	const raw = this.getNodeParameter('labels', i, '') as unknown;
+	const parts = (Array.isArray(raw) ? raw : [raw]).flatMap((value) =>
+		value === null || value === undefined ? [] : String(value).split(','),
+	);
 	// Label titles are lowercase on the server.
-	const wanted = String(this.getNodeParameter('labels', i, '') ?? '')
-		.split(',')
-		.map((label) => label.trim().toLowerCase())
-		.filter((label) => label.length > 0);
-	if (wanted.length === 0) {
+	const labels = [
+		...new Set(parts.map((label) => label.trim().toLowerCase()).filter((label) => label)),
+	];
+	if (labels.length === 0 && !allowEmpty) {
 		throw new NodeOperationError(this.getNode(), 'Enter at least one label', { itemIndex: i });
 	}
-	const current = asArray(
-		await wzApiRequest.call(this, 'GET', `/conversations/${id}/labels`),
-	) as unknown as string[];
-	const labels = [...new Set([...current.map(String), ...wanted])];
-	const response = await wzApiRequest.call(this, 'POST', `/conversations/${id}/labels`, {
+	return labels;
+}
+
+type LabelMode = 'add' | 'remove' | 'set';
+
+/** The label endpoints replace the whole list, so add and remove read the current labels first. */
+async function changeLabels(
+	this: IExecuteFunctions,
+	i: number,
+	kind: 'contacts' | 'conversations',
+	mode: LabelMode,
+): Promise<IDataObject> {
+	const idParam = kind === 'contacts' ? 'contactId' : 'conversationId';
+	const id = pathId.call(this, this.getNodeParameter(idParam, i));
+	// Only a real true clears: an expression answering the text 'false' must never wipe labels.
+	const clearAll = mode === 'set' && this.getNodeParameter('clearAll', i, false) === true;
+	const wanted = clearAll ? [] : labelsInput.call(this, i);
+	let labels = wanted;
+	if (mode !== 'set') {
+		const current = asArray(
+			await wzApiRequest.call(this, 'GET', `/${kind}/${id}/labels`),
+		).map(String);
+		labels =
+			mode === 'add'
+				? [...new Set([...current, ...wanted])]
+				: current.filter((label) => !wanted.includes(label.toLowerCase()));
+	}
+	const response = await wzApiRequest.call(this, 'POST', `/${kind}/${id}/labels`, {
 		body: { labels },
 	});
 	return { labels: asArray(response) as unknown as string[] };
@@ -676,7 +811,9 @@ export class WebzzConnect implements INodeType {
 		name: 'webzzConnect',
 		icon: { light: 'file:webzzconnect.svg', dark: 'file:webzzconnect.dark.svg' },
 		group: ['transform'],
-		version: [1],
+		// 1.1: label fields pick from the account's labels; version 1 keeps the text field.
+		version: [1, 1.1],
+		defaultVersion: 1.1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description: 'Work with contacts, deals, conversations and WhatsApp templates in WebzzConnect',
 		defaults: { name: 'WebzzConnect' },
@@ -751,6 +888,25 @@ export class WebzzConnect implements INodeType {
 		},
 
 		loadOptions: {
+			async getLabels(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const labels = asArray(await wzApiRequest.call(this, 'GET', '/labels'));
+				return labels
+					.map((label) => String(label.title))
+					.sort((a, b) => a.localeCompare(b))
+					.map((title) => ({ name: title, value: title }));
+			},
+
+			async getProducts(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const products = asArray(await wzApiRequest.call(this, 'GET', '/crm/products'));
+				return [
+					{ name: 'None (Custom Line)', value: '' },
+					...products.map((product) => ({
+						name: String(product.name),
+						value: String(product.id),
+					})),
+				];
+			},
+
 			async getPipelines(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const pipelines = asArray(await wzApiRequest.call(this, 'GET', '/crm/pipelines'));
 				return [
@@ -879,6 +1035,10 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'get') {
 						const id = pathId.call(this, this.getNodeParameter('contactId', i));
 						result = unwrapContact(await wzApiRequest.call(this, 'GET', `/contacts/${id}`));
+					} else if (operation === 'addLabels') {
+						result = await changeLabels.call(this, i, 'contacts', 'add');
+					} else if (operation === 'removeLabels') {
+						result = await changeLabels.call(this, i, 'contacts', 'remove');
 					} else if (operation === 'search') {
 						const query = this.getNodeParameter('query', i) as string;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;
@@ -930,6 +1090,12 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'get') {
 						const id = pathId.call(this, this.getNodeParameter('dealId', i));
 						result = asObject(await wzApiRequest.call(this, 'GET', `/crm/deals/${id}`));
+					} else if (['addNote', 'getNotes', 'updateNote', 'deleteNote'].includes(operation)) {
+						result = await dealNote.call(this, i, operation);
+					} else if (
+						['addProduct', 'getProducts', 'updateProduct', 'deleteProduct'].includes(operation)
+					) {
+						result = await dealProduct.call(this, i, operation);
 					} else if (operation === 'search') {
 						const filters = this.getNodeParameter('filters', i, {}) as IDataObject;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;
@@ -976,7 +1142,11 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'setCustomAttributes') {
 						result = await setCustomAttributes.call(this, i);
 					} else if (operation === 'addLabels') {
-						result = await addLabels.call(this, i);
+						result = await changeLabels.call(this, i, 'conversations', 'add');
+					} else if (operation === 'removeLabels') {
+						result = await changeLabels.call(this, i, 'conversations', 'remove');
+					} else if (operation === 'setLabels') {
+						result = await changeLabels.call(this, i, 'conversations', 'set');
 					} else if (operation === 'getAll') {
 						const filters = this.getNodeParameter('filters', i, {}) as IDataObject;
 						const returnAll = this.getNodeParameter('returnAll', i) as boolean;

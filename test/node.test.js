@@ -1047,3 +1047,212 @@ test('example: the sales flow has the virtual agent gate, no human label and no 
 	assert.ok(handOff.parameters.handoffNote);
 	assert.ok(flow.connections['Mine to answer?'] && flow.connections['Who am I']);
 });
+
+// --- Labels on contacts and conversations, label picker (0.6.0) ---
+
+async function runLabels(resource, operation, parameters, current = []) {
+	const calls = [];
+	const ctx = execContext({ parameters: { resource, operation, ...parameters }, calls });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body });
+		return options.method === 'GET' ? { payload: current } : { payload: options.body.labels };
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, out };
+}
+
+const CT = `${BASE}/api/v1/accounts/7/contacts`;
+
+test('contact addLabels: union, lowercased and deduped, from a picker list', async () => {
+	const { calls, out } = await runLabels('contact', 'addLabels', { contactId: '3', labels: ['b', 'B', ' a '] }, ['a']);
+	assert.deepEqual(summary(calls), [`GET ${CT}/3/labels null`, `POST ${CT}/3/labels {"labels":["a","b"]}`]);
+	assert.deepEqual(out[0][0].json, { labels: ['a', 'b'] });
+});
+
+test('contact removeLabels: missing labels are ignored, case-insensitive', async () => {
+	const { calls } = await runLabels('contact', 'removeLabels', { contactId: '3', labels: 'A, z' }, ['a', 'b']);
+	assert.deepEqual(summary(calls), [`GET ${CT}/3/labels null`, `POST ${CT}/3/labels {"labels":["b"]}`]);
+});
+
+test('conversation setLabels: one POST with the list, no read', async () => {
+	const { calls } = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: ['C'] }, ['a']);
+	assert.deepEqual(summary(calls), [`POST ${C}/4/labels {"labels":["c"]}`]);
+});
+
+test('conversation setLabels: clears only with Clear All Labels; an empty list is refused', async () => {
+	const cleared = await runLabels('conversation', 'setLabels', { conversationId: '4', clearAll: true, labels: ['ignored'] });
+	assert.deepEqual(summary(cleared.calls), [`POST ${C}/4/labels {"labels":[]}`]);
+	for (const labels of ['', [], [' ', ',']]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'conversation', operation: 'setLabels', conversationId: '4', clearAll: false, labels }, calls });
+		ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+			calls.push(options);
+			return {};
+		};
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /Enter at least one label/);
+		assert.equal(calls.length, 0);
+	}
+});
+
+test('conversation removeLabels and the empty addLabels refusal', async () => {
+	const { calls } = await runLabels('conversation', 'removeLabels', { conversationId: '4', labels: ['b'] }, ['a', 'b']);
+	assert.deepEqual(summary(calls), [`GET ${C}/4/labels null`, `POST ${C}/4/labels {"labels":["a"]}`]);
+	await assert.rejects(runLabels('conversation', 'addLabels', { conversationId: '4', labels: [] }), /Enter at least one label/);
+});
+
+test('labels: v1 text and v1.1 list give the same normalized titles', async () => {
+	const text = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: 'vip, hot-lead' });
+	const list = await runLabels('conversation', 'setLabels', { conversationId: '4', labels: ['VIP', ' vip ', 'x'] });
+	assert.equal(text.calls[0].body.labels.join(), 'vip,hot-lead');
+	assert.equal(list.calls[0].body.labels.join(), 'vip,x');
+});
+
+test('loadOptions getLabels: titles from /labels, sorted; node is version 1 and 1.1', async () => {
+	const calls = [];
+	const ctx = {
+		getNode: () => node,
+		getNodeParameter: (name, fallback) => (name === 'authentication' ? 'oAuth2' : fallback),
+		getCurrentNodeParameter: () => undefined,
+		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
+		helpers: {
+			httpRequestWithAuthentication: async (credential, options) => {
+				calls.push(`${options.method} ${options.url}`);
+				return { payload: [{ id: 2, title: 'vip' }, { id: 1, title: 'hot-lead' }] };
+			},
+		},
+	};
+	const options = await new WebzzConnect().methods.loadOptions.getLabels.call(ctx);
+	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/labels`]);
+	assert.deepEqual(options, [{ name: 'hot-lead', value: 'hot-lead' }, { name: 'vip', value: 'vip' }]);
+	assert.deepEqual(new WebzzConnect().description.version, [1, 1.1]);
+	const labelProps = new WebzzConnect().description.properties.filter((p) => p.name === 'labels');
+	assert.ok(labelProps.some((p) => p.type === 'string' && p.displayOptions.show['@version'][0] === 1));
+	assert.ok(labelProps.some((p) => p.type === 'multiOptions' && p.displayOptions.hide['@version'][0] === 1));
+});
+
+test('conversation setLabels: Clear All Labels must be a real true', async () => {
+	for (const clearAll of ['false', 'true', 1]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'conversation', operation: 'setLabels', conversationId: '4', clearAll, labels: [] }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /Enter at least one label/);
+		assert.equal(calls.length, 0);
+	}
+	assert.equal(new WebzzConnect().description.defaultVersion, 1.1);
+});
+
+// --- Deal notes (0.6.0) ---
+
+async function runDealWith(operation, parameters, respond) {
+	const calls = [];
+	const ctx = execContext({ parameters: { resource: 'deal', operation, ...parameters }, calls });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body });
+		return respond ? respond(options) : {};
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, items: out[0].map((item) => item.json) };
+}
+
+const D = `${BASE}/api/v1/accounts/7/crm/deals`;
+
+test('deal notes: add, list, update and delete hit /crm/deals/:id/notes', async () => {
+	const added = await runDealWith('addNote', { dealId: '5', content: 'Called, wants a quote' }, (o) => ({ id: 9, content: o.body.content }));
+	assert.deepEqual(summary(added.calls), [`POST ${D}/5/notes {"content":"Called, wants a quote"}`]);
+	assert.deepEqual(added.items, [{ id: 9, content: 'Called, wants a quote' }]);
+
+	const listed = await runDealWith('getNotes', { dealId: '5' }, () => [{ id: 9 }, { id: 8 }]);
+	assert.deepEqual(summary(listed.calls), [`GET ${D}/5/notes null`]);
+	assert.deepEqual(listed.items, [{ id: 9 }, { id: 8 }]);
+
+	const updated = await runDealWith('updateNote', { dealId: '5', noteId: '9', content: 'Quote sent' }, (o) => ({ id: 9, content: o.body.content, edited: true }));
+	assert.deepEqual(summary(updated.calls), [`PATCH ${D}/5/notes/9 {"content":"Quote sent"}`]);
+
+	const deleted = await runDealWith('deleteNote', { dealId: '5', noteId: '9' }, () => undefined);
+	assert.deepEqual(summary(deleted.calls), [`DELETE ${D}/5/notes/9 null`]);
+	assert.deepEqual(deleted.items, [{ deleted: true, id: '9' }]);
+});
+
+test('deal notes: empty or too long text is refused before any request', async () => {
+	for (const content of ['', '   ', 'x'.repeat(10001)]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation: 'addNote', dealId: '5', content }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /note text|limit is 10000/);
+		assert.equal(calls.length, 0);
+	}
+	const ok = await runDealWith('addNote', { dealId: '5', content: 'x'.repeat(10000) }, () => ({ id: 1 }));
+	assert.equal(ok.calls.length, 1);
+});
+
+test('deal notes: a 403 on update or delete explains the note ownership rule', async () => {
+	for (const operation of ['updateNote', 'deleteNote']) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation, dealId: '5', noteId: '9', content: 'x' }, calls });
+		ctx.helpers.httpRequestWithAuthentication = async () => {
+			const error = new Error('Request failed with status code 403');
+			error.httpCode = 403;
+			error.response = { status: 403, data: { error: 'You are not authorized to do this action' } };
+			throw error;
+		};
+		await assert.rejects(new WebzzConnect().execute.call(ctx), (error) => {
+			assert.match(error.message, /^\[403\]/);
+			assert.match(error.description, /only by the connection or person that wrote it/);
+			return true;
+		});
+	}
+});
+
+// --- Deal product lines (0.6.0) ---
+
+test('deal products: catalog line, custom line, update, delete and list', async () => {
+	const catalog = await runDealWith('addProduct', { dealId: '5', productId: '12', lineFields: { quantity: 2 } }, (o) => ({ id: 3, ...o.body }));
+	assert.deepEqual(summary(catalog.calls), [`POST ${D}/5/products {"product_id":"12","quantity":2}`]);
+
+	const custom = await runDealWith('addProduct', { dealId: '5', productId: '', lineFields: { name: ' Setup ', unitPrice: 0 } }, () => ({ id: 4 }));
+	assert.deepEqual(summary(custom.calls), [`POST ${D}/5/products {"name":"Setup","unit_price":0,"quantity":1}`]);
+
+	const updated = await runDealWith('updateProduct', { dealId: '5', lineId: '3', lineUpdateFields: { quantity: 3, name: '' } }, () => ({ id: 3 }));
+	assert.deepEqual(summary(updated.calls), [`PATCH ${D}/5/products/3 {"quantity":3}`]);
+
+	const deleted = await runDealWith('deleteProduct', { dealId: '5', lineId: '3' }, () => undefined);
+	assert.deepEqual(summary(deleted.calls), [`DELETE ${D}/5/products/3 null`]);
+	assert.deepEqual(deleted.items, [{ deleted: true, id: '3' }]);
+
+	const listed = await runDealWith('getProducts', { dealId: '5' }, () => [{ id: 3 }, { id: 4 }]);
+	assert.deepEqual(summary(listed.calls), [`GET ${D}/5/products null`]);
+	assert.equal(listed.items.length, 2);
+});
+
+test('deal products: refusals before any request', async () => {
+	const cases = [
+		['addProduct', { dealId: '5', productId: '', lineFields: {} }, /Choose a product/],
+		['addProduct', { dealId: '5', productId: '', lineFields: { name: 'Setup' } }, /Choose a product/],
+		['addProduct', { dealId: '5', productId: '', lineFields: { unitPrice: 10 } }, /Choose a product/],
+		['updateProduct', { dealId: '5', lineId: '3', lineUpdateFields: {} }, /at least one field/],
+		['deleteProduct', { dealId: '5', lineId: '3/../9' }, /not a valid ID/],
+		['deleteNote', { dealId: 'abc', noteId: '1' }, /not a valid ID/],
+	];
+	for (const [operation, parameters, message] of cases) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation, ...parameters }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), message);
+		assert.equal(calls.length, 0, operation);
+	}
+});
+
+test('loadOptions getProducts: catalog from /crm/products with a None option', async () => {
+	const calls = [];
+	const ctx = {
+		getNode: () => node,
+		getNodeParameter: (name, fallback) => (name === 'authentication' ? 'oAuth2' : fallback),
+		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
+		helpers: {
+			httpRequestWithAuthentication: async (credential, options) => {
+				calls.push(`${options.method} ${options.url}`);
+				return [{ id: 12, name: 'Pro plan' }];
+			},
+		},
+	};
+	const options = await new WebzzConnect().methods.loadOptions.getProducts.call(ctx);
+	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/crm/products`]);
+	assert.deepEqual(options, [{ name: 'None (Custom Line)', value: '' }, { name: 'Pro plan', value: '12' }]);
+});

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- **Labels on contacts.** New Contact > **Add Labels** and **Remove Labels**. The contact keeps its other labels. Needs the contacts view and edit permissions.
+- **More label operations on conversations.** New Conversation > **Remove Labels** and **Set Labels** (replaces all labels). Set Labels refuses an empty list unless **Clear All Labels** is on, so an empty expression never clears a conversation's labels by mistake. Removing a label the record doesn't have is ignored.
+- **Label picker.** Label fields list the account's labels. An expression can still give a list or comma-separated text. Labels are sent in lowercase. This comes with node version 1.1: workflows made before 0.6.0 stay on version 1 and keep their comma-separated Labels text field.
+- **Deal notes.** New Deal > **Add Note**, **Get Notes**, **Update Note** and **Delete Note**. Notes also show on the contact's notes. Only the connection or person that wrote a note, or an administrator, can change or delete it. A note written through an API key belongs to that key. Notes are limited to 10,000 characters.
+- **Deal product lines.** New Deal > **Add Product**, **Get Products**, **Update Product** and **Delete Product**. Pick a product from the catalog, or add a custom line with a name and unit price. Once a deal has product lines, its value is the sum of its lines, and the Value field in Deal Create and Update is ignored (its description now says so).
+- Deleting deals is intentionally not offered.
+
 ## 0.5.1
 
 - **New address.** WebzzConnect moved to `https://app.webzz.io`. The nodes, both credentials (including the OAuth authorization and token URLs) and the docs links (`https://api-docs.webzz.io`) use it. Credentials created before 0.5.1 keep working: the old address still answers.
