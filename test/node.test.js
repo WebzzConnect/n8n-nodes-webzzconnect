@@ -1182,3 +1182,21 @@ test('deal notes: empty or too long text is refused before any request', async (
 	const ok = await runDealWith('addNote', { dealId: '5', content: 'x'.repeat(10000) }, () => ({ id: 1 }));
 	assert.equal(ok.calls.length, 1);
 });
+
+test('deal notes: a 403 on update or delete explains the note ownership rule', async () => {
+	for (const operation of ['updateNote', 'deleteNote']) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'deal', operation, dealId: '5', noteId: '9', content: 'x' }, calls });
+		ctx.helpers.httpRequestWithAuthentication = async () => {
+			const error = new Error('Request failed with status code 403');
+			error.httpCode = 403;
+			error.response = { status: 403, data: { error: 'You are not authorized to do this action' } };
+			throw error;
+		};
+		await assert.rejects(new WebzzConnect().execute.call(ctx), (error) => {
+			assert.match(error.message, /^\[403\]/);
+			assert.match(error.description, /only by the connection or person that wrote it/);
+			return true;
+		});
+	}
+});

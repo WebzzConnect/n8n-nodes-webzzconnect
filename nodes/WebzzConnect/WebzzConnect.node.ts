@@ -8,7 +8,7 @@ import type {
 	INodeTypeDescription,
 	ResourceMapperFields,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { contactFields, contactOperations } from './descriptions/ContactDescription';
 import { conversationFields, conversationOperations } from './descriptions/ConversationDescription';
@@ -488,7 +488,7 @@ async function dealNote(
 	if (operation === 'getNotes') return asArray(await wzApiRequest.call(this, 'GET', base));
 	if (operation === 'deleteNote') {
 		const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
-		await wzApiRequest.call(this, 'DELETE', `${base}/${noteId}`);
+		await explainNoteRefusal.call(this, i, wzApiRequest.call(this, 'DELETE', `${base}/${noteId}`));
 		return { deleted: true, id: noteId };
 	}
 	const content = String(this.getNodeParameter('content', i, '') ?? '');
@@ -507,8 +507,29 @@ async function dealNote(
 	}
 	const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
 	return asObject(
-		await wzApiRequest.call(this, 'PATCH', `${base}/${noteId}`, { body: { content } }),
+		await explainNoteRefusal.call(
+			this,
+			i,
+			wzApiRequest.call(this, 'PATCH', `${base}/${noteId}`, { body: { content } }),
+		),
 	);
+}
+
+/** A 403 on someone else's note reads as a scope problem in the generic text: name the ownership rule. */
+async function explainNoteRefusal<T>(
+	this: IExecuteFunctions,
+	i: number,
+	request: Promise<T>,
+): Promise<T> {
+	try {
+		return await request;
+	} catch (error) {
+		if (error instanceof NodeApiError && String(error.httpCode) === '403') {
+			error.description =
+				'A note can be changed or deleted only by the connection or person that wrote it, or by an administrator. A note written through an API key belongs to that key. This refusal also happens when the connection lacks the deals edit permission.';
+		}
+		throw errorForItem(this.getNode(), error, i);
+	}
 }
 
 /** Lowercase label titles from a text field ("a, b") or a picker / expression list. */
