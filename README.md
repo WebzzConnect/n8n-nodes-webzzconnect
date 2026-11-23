@@ -77,13 +77,13 @@ Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `nam
 - Send Message (reply, or add a private note; optionally attach a file by public URL, with the text as a caption). **Message Type** also offers WhatsApp interactive messages: **Reply Buttons** (up to 3), **List** (up to 10 rows with optional descriptions and sections, and a menu label) and **Link Button** (one button that opens a URL), each with an optional header (text, or image / video / document by URL; a list only takes text) and footer. The message text is the body and is required. Each button or row has an ID (the title if left empty) that comes back as `button_payload` when the contact taps it. Interactive messages need a WhatsApp Cloud inbox and the 24-hour window; WebzzConnect checks WhatsApp's limits and answers with a clear message.
 - Set Custom Attributes (key / value pairs, merged into the conversation's existing attributes; needs the conversations view and resolve permissions)
 - Add Labels / Remove Labels (the conversation keeps its other labels) and Set Labels (replaces all its labels; to remove every label, turn on **Clear All Labels**, since an empty list is refused). Needs the conversations view and reply permissions.
-
-**Labels.** Labels are picked from your account's labels, or given by an expression (a list, or comma-separated text), and sent in lowercase. Workflows made before 0.6.0 (node version 1) keep their comma-separated Labels text field.
 - Get
 - Get Many (by status, inbox and virtual agent; statuses include With a Virtual Agent, Waiting on Customer and Pending (Both). With a virtual agent connection, Open finds none)
 - Assign (a person or a virtual agent in the conversation's inbox, and/or a team, with an optional hand-off note; an unknown or unavailable one is refused and nothing changes)
 - Unassign (agent, team, or both, with an optional hand-off note)
 - Update Status (Open, Resolved, Snoozed with an optional Snooze Until, or Waiting on Customer). Resolved sends the CSAT survey when the inbox has CSAT on. Open through an "as me" connection of an agent-role user also assigns the conversation to that user.
+
+**Labels.** Labels are picked from your account's labels, or given by an expression (a list, or comma-separated text), and sent in lowercase. Workflows made before 0.6.0 (node version 1) keep their comma-separated Labels text field.
 
 **Connection**
 - Get Info (who this credential acts as)

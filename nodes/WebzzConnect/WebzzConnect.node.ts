@@ -502,7 +502,8 @@ async function changeLabels(
 ): Promise<IDataObject> {
 	const idParam = kind === 'contacts' ? 'contactId' : 'conversationId';
 	const id = pathId.call(this, this.getNodeParameter(idParam, i));
-	const clearAll = mode === 'set' && (this.getNodeParameter('clearAll', i, false) as boolean);
+	// Only a real true clears: an expression answering the text 'false' must never wipe labels.
+	const clearAll = mode === 'set' && this.getNodeParameter('clearAll', i, false) === true;
 	const wanted = clearAll ? [] : labelsInput.call(this, i);
 	let labels = wanted;
 	if (mode !== 'set') {
@@ -702,6 +703,7 @@ export class WebzzConnect implements INodeType {
 		group: ['transform'],
 		// 1.1: label fields pick from the account's labels; version 1 keeps the text field.
 		version: [1, 1.1],
+		defaultVersion: 1.1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description: 'Work with contacts, deals, conversations and WhatsApp templates in WebzzConnect',
 		defaults: { name: 'WebzzConnect' },

@@ -1129,3 +1129,13 @@ test('loadOptions getLabels: titles from /labels, sorted; node is version 1 and 
 	assert.ok(labelProps.some((p) => p.type === 'string' && p.displayOptions.show['@version'][0] === 1));
 	assert.ok(labelProps.some((p) => p.type === 'multiOptions' && p.displayOptions.hide['@version'][0] === 1));
 });
+
+test('conversation setLabels: Clear All Labels must be a real true', async () => {
+	for (const clearAll of ['false', 'true', 1]) {
+		const calls = [];
+		const ctx = execContext({ parameters: { resource: 'conversation', operation: 'setLabels', conversationId: '4', clearAll, labels: [] }, calls });
+		await assert.rejects(new WebzzConnect().execute.call(ctx), /Enter at least one label/);
+		assert.equal(calls.length, 0);
+	}
+	assert.equal(new WebzzConnect().description.defaultVersion, 1.1);
+});
