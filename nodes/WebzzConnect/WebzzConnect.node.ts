@@ -3,6 +3,8 @@ import type {
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodeListSearchItems,
+	INodeListSearchResult,
 	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
@@ -22,10 +24,12 @@ import {
 	COPY,
 	asArray,
 	asObject,
+	BASE_URL,
 	assertNotFailed,
 	authenticationProperty,
 	digitsOnly,
 	errorForItem,
+	getAccountId,
 	getConnectionInfo,
 	handleApiError,
 	pairsToObject,
@@ -33,6 +37,9 @@ import {
 	pathId,
 	phonesMatch,
 	readErrorInfo,
+	simplifyContact,
+	simplifyConversation,
+	simplifyDeal,
 	stripInternalKeys,
 	unwrapContact,
 	wzApiRequest,
@@ -41,6 +48,27 @@ import {
 } from './GenericFunctions';
 
 type Ctx = IExecuteFunctions | ILoadOptionsFunctions;
+
+/** Display names of the ID parameters, for refusals that name the field. */
+const ID_LABELS: Record<string, string> = {
+	contactId: 'Contact ID',
+	conversationId: 'Conversation ID',
+	dealId: 'Deal ID',
+	lineId: 'Product Line ID',
+	noteId: 'Note ID',
+};
+
+/**
+ * A record ID parameter as a path segment. Version 1.2 saves a resource locator, older versions
+ * a plain string; extractValue reads both.
+ */
+function idParam(this: IExecuteFunctions, name: string, i: number): string {
+	const value = this.getNodeParameter(name, i, '', { extractValue: true });
+	return pathId.call(this, value, ID_LABELS[name]);
+}
+
+const PAGE_SIZE = 25;
+const CONTACTS_PAGE_SIZE = 100;
 
 function compact(values: IDataObject): IDataObject {
 	const out: IDataObject = {};
@@ -197,7 +225,7 @@ async function readBack(this: IExecuteFunctions, id: string): Promise<IDataObjec
  * refuses the second write with 409 if this check is bypassed).
  */
 async function assignConversation(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+	const id = idParam.call(this, 'conversationId', i);
 	const assignee = parseAssignee.call(this, this.getNodeParameter('agentId', i, ''));
 	const teamId = String(this.getNodeParameter('teamId', i, '') ?? '').trim();
 	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
@@ -221,7 +249,7 @@ async function assignConversation(this: IExecuteFunctions, i: number): Promise<I
 	if (teamId) {
 		// The note rides on the team call too: the server refuses a note on a team change, so the server decides
 		// (team-only, or team + agent from a non-agent connection) and nothing is written before the refusal.
-		const body: IDataObject = { team_id: Number(pathId.call(this, teamId)) };
+		const body: IDataObject = { team_id: Number(pathId.call(this, teamId, 'Team Name or ID')) };
 		if (note) body.handoff_note = note;
 		team = asObject(await wzApiRequest.call(this, 'POST', `/conversations/${id}/assignments`, { body }));
 		if (team.id === undefined) {
@@ -261,7 +289,7 @@ async function assignConversation(this: IExecuteFunctions, i: number): Promise<I
  * the team is removed.
  */
 async function unassignConversation(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+	const id = idParam.call(this, 'conversationId', i);
 	const from = this.getNodeParameter('unassignFrom', i, 'agent') as string;
 	const note = String(this.getNodeParameter('handoffNote', i, '') ?? '');
 	// Separate calls: assignee_id takes precedence over team_id when both are present.
@@ -284,16 +312,18 @@ async function unassignConversation(this: IExecuteFunctions, i: number): Promise
  * `snoozed_until` is Unix seconds and the key is omitted when empty (an empty value raises).
  */
 async function updateConversationStatus(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+	const id = idParam.call(this, 'conversationId', i);
 	const status = this.getNodeParameter('status', i) as string;
 	const body: IDataObject = { status };
 	const snoozeUntil = status === 'snoozed' ? this.getNodeParameter('snoozeUntil', i, '') : '';
 	if (snoozeUntil !== '' && snoozeUntil !== undefined && snoozeUntil !== null) {
 		const millis = new Date(String(snoozeUntil)).getTime();
 		if (Number.isNaN(millis)) {
-			throw new NodeOperationError(this.getNode(), `"${String(snoozeUntil)}" is not a valid date`, {
-				itemIndex: i,
-			});
+			throw new NodeOperationError(
+				this.getNode(),
+				`'Snooze Until' must be a date and time, e.g. 2026-12-01T09:00:00, but got "${String(snoozeUntil)}"`,
+				{ itemIndex: i },
+			);
 		}
 		body.snoozed_until = Math.floor(millis / 1000);
 	}
@@ -316,9 +346,11 @@ async function uploadByUrl(this: IExecuteFunctions, url: string, i: number): Pro
 		await wzApiRequest.call(this, 'POST', '/upload', { body: { external_url: url } }),
 	);
 	if (!upload.blob_id) {
-		throw new NodeOperationError(this.getNode(), 'WebzzConnect did not return the uploaded file', {
-			itemIndex: i,
-		});
+		throw new NodeOperationError(
+			this.getNode(),
+			"WebzzConnect did not return the uploaded file. Check that the 'File URL' (or 'Header Media URL') is a public link, then run again.",
+			{ itemIndex: i },
+		);
 	}
 	return String(upload.blob_id);
 }
@@ -373,7 +405,7 @@ function interactiveAttributes(
 	) {
 		throw new NodeOperationError(
 			this.getNode(),
-			'Choose Header Type Image, Video or Document to use Header Media URL',
+			"Choose 'Header Type' Image, Video or Document to use 'Header Media URL'",
 			{ itemIndex: i },
 		);
 	}
@@ -383,7 +415,7 @@ function interactiveAttributes(
 		if (type === 'list') {
 			throw new NodeOperationError(
 				this.getNode(),
-				'A list can only have a text header. Choose Header Type Text or None.',
+				"A list can only have a text header. Choose 'Header Type' Text or None.",
 				{ itemIndex: i },
 			);
 		}
@@ -391,7 +423,7 @@ function interactiveAttributes(
 		if (!HTTP_URL.test(mediaUrl)) {
 			throw new NodeOperationError(
 				this.getNode(),
-				`Enter a Header Media URL starting with http:// or https:// for the ${headerType} header`,
+				`Enter a 'Header Media URL' starting with http:// or https:// for the ${headerType} header`,
 				{ itemIndex: i },
 			);
 		}
@@ -417,7 +449,7 @@ function firstMessage(conversation: IDataObject): unknown {
 }
 
 async function sendConversationMessage(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+	const id = idParam.call(this, 'conversationId', i);
 	const type = this.getNodeParameter('messageType', i, 'text') as string;
 	const content = String(this.getNodeParameter('content', i, '') ?? '');
 	const body: IDataObject = { message_type: 'outgoing' };
@@ -426,12 +458,12 @@ async function sendConversationMessage(this: IExecuteFunctions, i: number): Prom
 		const options = this.getNodeParameter('options', i, {}) as IDataObject;
 		fileUrl = String(this.getNodeParameter('fileUrl', i, '') ?? '').trim();
 		if (!content && !fileUrl) {
-			throw new NodeOperationError(this.getNode(), 'Enter a message, a File URL, or both', {
+			throw new NodeOperationError(this.getNode(), "Enter a 'Message', a 'File URL', or both", {
 				itemIndex: i,
 			});
 		}
 		if (fileUrl && !HTTP_URL.test(fileUrl)) {
-			throw new NodeOperationError(this.getNode(), 'File URL must start with http:// or https://', {
+			throw new NodeOperationError(this.getNode(), "'File URL' must start with http:// or https://", {
 				itemIndex: i,
 			});
 		}
@@ -440,7 +472,7 @@ async function sendConversationMessage(this: IExecuteFunctions, i: number): Prom
 		if (!content) {
 			throw new NodeOperationError(
 				this.getNode(),
-				'Enter the Message: it is the body of the buttons, list or link button',
+				"Enter the 'Message': it is the body of the buttons, list or link button",
 				{ itemIndex: i },
 			);
 		}
@@ -460,7 +492,7 @@ async function sendConversationMessage(this: IExecuteFunctions, i: number): Prom
 
 /** Merged into the existing attributes: the endpoint replaces the whole hash. */
 async function setCustomAttributes(this: IExecuteFunctions, i: number): Promise<IDataObject> {
-	const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+	const id = idParam.call(this, 'conversationId', i);
 	const updates = pairsToObject(this.getNodeParameter('customAttributes', i, {}) as IDataObject);
 	if (Object.keys(updates).length === 0) {
 		throw new NodeOperationError(this.getNode(), 'Add at least one attribute with a key', {
@@ -483,11 +515,11 @@ async function dealNote(
 	i: number,
 	operation: string,
 ): Promise<IDataObject | IDataObject[]> {
-	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const dealId = idParam.call(this, 'dealId', i);
 	const base = `/crm/deals/${dealId}/notes`;
 	if (operation === 'getNotes') return asArray(await wzApiRequest.call(this, 'GET', base));
 	if (operation === 'deleteNote') {
-		const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+		const noteId = idParam.call(this, 'noteId', i);
 		await explainNoteRefusal.call(this, i, wzApiRequest.call(this, 'DELETE', `${base}/${noteId}`));
 		return { deleted: true, id: noteId };
 	}
@@ -505,7 +537,7 @@ async function dealNote(
 	if (operation === 'addNote') {
 		return asObject(await wzApiRequest.call(this, 'POST', base, { body: { content } }));
 	}
-	const noteId = pathId.call(this, this.getNodeParameter('noteId', i));
+	const noteId = idParam.call(this, 'noteId', i);
 	return asObject(
 		await explainNoteRefusal.call(
 			this,
@@ -547,7 +579,7 @@ async function dealProduct(
 	i: number,
 	operation: string,
 ): Promise<IDataObject | IDataObject[]> {
-	const dealId = pathId.call(this, this.getNodeParameter('dealId', i));
+	const dealId = idParam.call(this, 'dealId', i);
 	const base = `/crm/deals/${dealId}/products`;
 	if (operation === 'getProducts') return asArray(await wzApiRequest.call(this, 'GET', base));
 	if (operation === 'addProduct') {
@@ -555,7 +587,7 @@ async function dealProduct(
 		const fields = this.getNodeParameter('lineFields', i, {}) as IDataObject;
 		const body = productLineBody({
 			...fields,
-			productId: productId ? pathId.call(this, productId) : undefined,
+			productId: productId ? pathId.call(this, productId, 'Product Name or ID') : undefined,
 		});
 		if (!body.product_id && (!body.name || body.unit_price === undefined)) {
 			throw new NodeOperationError(
@@ -567,7 +599,7 @@ async function dealProduct(
 		if (body.quantity === undefined) body.quantity = 1;
 		return asObject(await wzApiRequest.call(this, 'POST', base, { body }));
 	}
-	const lineId = pathId.call(this, this.getNodeParameter('lineId', i));
+	const lineId = idParam.call(this, 'lineId', i);
 	if (operation === 'deleteProduct') {
 		await wzApiRequest.call(this, 'DELETE', `${base}/${lineId}`);
 		return { deleted: true, id: lineId };
@@ -575,7 +607,7 @@ async function dealProduct(
 	const fields = this.getNodeParameter('lineUpdateFields', i, {}) as IDataObject;
 	const body = productLineBody({
 		...fields,
-		productId: fields.productId ? pathId.call(this, fields.productId) : undefined,
+		productId: fields.productId ? pathId.call(this, fields.productId, 'Product Name or ID') : undefined,
 	});
 	if (Object.keys(body).length === 0) {
 		throw new NodeOperationError(this.getNode(), 'Enter at least one field to update', {
@@ -610,8 +642,7 @@ async function changeLabels(
 	kind: 'contacts' | 'conversations',
 	mode: LabelMode,
 ): Promise<IDataObject> {
-	const idParam = kind === 'contacts' ? 'contactId' : 'conversationId';
-	const id = pathId.call(this, this.getNodeParameter(idParam, i));
+	const id = idParam.call(this, kind === 'contacts' ? 'contactId' : 'conversationId', i);
 	// Only a real true clears: an expression answering the text 'false' must never wipe labels.
 	const clearAll = mode === 'set' && this.getNodeParameter('clearAll', i, false) === true;
 	const wanted = clearAll ? [] : labelsInput.call(this, i);
@@ -658,19 +689,20 @@ function templateFields(template: WhatsAppTemplate): TemplateField[] {
 	const header = component(template, 'HEADER');
 	const format = String(header?.format ?? '').toUpperCase();
 	if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format)) {
-		fields.push({ id: 'header_media_url', displayName: `Header ${format.toLowerCase()} URL` });
+		const kind = format.charAt(0) + format.slice(1).toLowerCase();
+		fields.push({ id: 'header_media_url', displayName: `Header ${kind} URL` });
 	} else if (format === 'TEXT' && (header?.text ?? '').includes('{')) {
-		fields.push({ id: 'header_text', displayName: 'Header text variable' });
+		fields.push({ id: 'header_text', displayName: 'Header Text Variable' });
 	}
 	for (const placeholder of placeholdersOf(bodyText(template))) {
-		fields.push({ id: `body_${placeholder}`, displayName: `Body variable ${placeholder}` });
+		fields.push({ id: `body_${placeholder}`, displayName: `Body Variable ${placeholder}` });
 	}
 	(component(template, 'BUTTONS')?.buttons ?? []).forEach((button, index) => {
 		const type = String(button.type ?? '').toUpperCase();
 		if (type === 'URL' && (button.url ?? '').includes('{')) {
-			fields.push({ id: `button_url_${index + 1}`, displayName: `Button ${index + 1} URL variable` });
+			fields.push({ id: `button_url_${index + 1}`, displayName: `Button ${index + 1} URL Variable` });
 		} else if (type === 'COPY_CODE') {
-			fields.push({ id: `button_code_${index + 1}`, displayName: `Button ${index + 1} coupon code` });
+			fields.push({ id: `button_code_${index + 1}`, displayName: `Button ${index + 1} Coupon Code` });
 		}
 	});
 	return fields;
@@ -708,22 +740,24 @@ function bodyText(template: WhatsAppTemplate): string {
 
 async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const inboxId = this.getNodeParameter('inboxId', i) as string;
-	const contactId = this.getNodeParameter('contactId', i) as string;
+	const contactId = idParam.call(this, 'contactId', i);
 	const key = this.getNodeParameter('template', i) as string;
 	const [name, language] = key.split('::');
 	if (!name || !language) {
 		throw new NodeOperationError(
 			this.getNode(),
-			'Choose a template from the list, or use the format template_name::language',
+			"Choose a template from the 'Template Name or ID' list, or use the format template_name::language",
 			{ itemIndex: i },
 		);
 	}
 
 	const inbox = (await fetchInboxes.call(this)).find((entry) => String(entry.id) === String(inboxId));
 	if (!inbox) {
-		throw new NodeOperationError(this.getNode(), `Inbox ${inboxId} was not found`, {
-			itemIndex: i,
-		});
+		throw new NodeOperationError(
+			this.getNode(),
+			`Inbox ${inboxId} was not found. Choose an inbox from the 'WhatsApp Inbox Name or ID' list.`,
+			{ itemIndex: i },
+		);
 	}
 	const template = approvedTemplates(inbox).find(
 		(entry) => entry.name === name && entry.language === language,
@@ -731,7 +765,7 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 	if (!template) {
 		throw new NodeOperationError(
 			this.getNode(),
-			`No approved template "${name}" (${language}) in this inbox`,
+			`No approved template "${name}" (${language}) in this inbox. Choose a template from the 'Template Name or ID' list, or check that it is approved in WhatsApp Manager.`,
 			{ itemIndex: i },
 		);
 	}
@@ -752,7 +786,7 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 		if (entries.length !== placeholders.length) {
 			throw new NodeOperationError(
 				this.getNode(),
-				`The template body has ${placeholders.length} variable(s) but ${entries.length} value(s) were given`,
+				`The template body has ${placeholders.length} variable(s) but ${entries.length} value(s) were given. Add one 'Body Variables' entry per placeholder, in order.`,
 				{ itemIndex: i },
 			);
 		}
@@ -765,7 +799,7 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 	if (missing.length > 0) {
 		throw new NodeOperationError(
 			this.getNode(),
-			`Missing value for: ${missing.map((field) => field.displayName).join(', ')}`,
+			`Fill in these 'Template Fields': ${missing.map((field) => field.displayName).join(', ')}`,
 			{ itemIndex: i },
 		);
 	}
@@ -802,6 +836,32 @@ async function sendWhatsAppTemplate(this: IExecuteFunctions, i: number): Promise
 	return conversation;
 }
 
+/** The Simplify mapping of a read operation, or undefined when the operation has none. */
+function simplifierFor(
+	resource: string,
+	operation: string,
+): ((record: IDataObject) => IDataObject) | undefined {
+	if (operation !== 'get' && operation !== 'search' && operation !== 'getAll') return undefined;
+	if (resource === 'contact' && operation !== 'getAll') return simplifyContact;
+	if (resource === 'deal' && operation !== 'getAll') return simplifyDeal;
+	if (resource === 'conversation' && operation !== 'search') return simplifyConversation;
+	return undefined;
+}
+
+/** A link to the record in the WebzzConnect app, for the resource locator lists. */
+async function appUrl(this: ILoadOptionsFunctions, path: string): Promise<string> {
+	return `${BASE_URL}/app/accounts/${await getAccountId.call(this)}/${path}`;
+}
+
+function nextPage(page: number, more: boolean): string | undefined {
+	return more ? String(page + 1) : undefined;
+}
+
+function pageOf(paginationToken?: string): number {
+	const page = Number(paginationToken);
+	return Number.isInteger(page) && page > 0 ? page : 1;
+}
+
 export class WebzzConnect implements INodeType {
 	// Programmatic style: Create or Update chains several dependent calls (search, match, patch or
 	// create, retry), the WhatsApp template send renders the message from inbox data, and every
@@ -812,8 +872,10 @@ export class WebzzConnect implements INodeType {
 		icon: { light: 'file:webzzconnect.svg', dark: 'file:webzzconnect.dark.svg' },
 		group: ['transform'],
 		// 1.1: label fields pick from the account's labels; version 1 keeps the text field.
-		version: [1, 1.1],
-		defaultVersion: 1.1,
+		// 1.2: record IDs are picked from searchable lists, the deal owner from the account's people,
+		// and read operations have Simplify. Older versions keep their text fields and raw output.
+		version: [1, 1.1, 1.2],
+		defaultVersion: 1.2,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description: 'Work with contacts, deals, conversations and WhatsApp templates in WebzzConnect',
 		defaults: { name: 'WebzzConnect' },
@@ -861,6 +923,106 @@ export class WebzzConnect implements INodeType {
 	};
 
 	methods = {
+		listSearch: {
+			/** Contacts by name, email or phone (the search endpoint), or all contacts without a filter. */
+			async searchContacts(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				const page = pageOf(paginationToken);
+				const query = String(filter ?? '').trim();
+				const response = query
+					? await wzApiRequest.call(this, 'GET', '/contacts/search', { qs: { q: query, page } })
+					: await wzApiRequest.call(this, 'GET', '/contacts', { qs: { page } });
+				const contacts = asArray(response);
+				const hasMore = asObject(asObject(response).meta).has_more;
+				const more =
+					typeof hasMore === 'boolean' ? hasMore : contacts.length >= CONTACTS_PAGE_SIZE;
+				const base = await appUrl.call(this, 'contacts');
+				const results: INodeListSearchItems[] = contacts.map((contact) => {
+					const detail = contact.phone_number || contact.email || `#${String(contact.id)}`;
+					return {
+						name: `${String(contact.name ?? '')} (${String(detail)})`.trim(),
+						value: String(contact.id),
+						url: `${base}/${String(contact.id)}`,
+					};
+				});
+				return { results, paginationToken: nextPage(page, more) };
+			},
+
+			/** Deals by title or contact name. */
+			async searchDeals(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				const page = pageOf(paginationToken);
+				const query = String(filter ?? '').trim();
+				const deals = asArray(
+					await wzApiRequest.call(this, 'GET', '/crm/deals', {
+						qs: query ? { q: query, page } : { page },
+					}),
+				);
+				const results: INodeListSearchItems[] = deals.map((deal) => {
+					const contactName = String(asObject(deal.contact).name ?? '');
+					return {
+						name: contactName ? `${String(deal.title)} · ${contactName}` : String(deal.title),
+						value: String(deal.id),
+					};
+				});
+				return { results, paginationToken: nextPage(page, deals.length >= PAGE_SIZE) };
+			},
+
+			/** Conversations by contact name (filtered per page), or one conversation by its number. */
+			async searchConversations(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				const query = String(filter ?? '').trim();
+				const base = await appUrl.call(this, 'conversations');
+				const item = (conversation: IDataObject): INodeListSearchItems => {
+					const contactName = String(asObject(asObject(conversation.meta).sender).name ?? '');
+					return {
+						name: [`#${String(conversation.id)}`, contactName, String(conversation.status ?? '')]
+							.filter((part) => part)
+							.join(' · '),
+						value: String(conversation.id),
+						url: `${base}/${String(conversation.id)}`,
+					};
+				};
+				if (/^\d+$/.test(query)) {
+					try {
+						const conversation = asObject(
+							await wzRawRequest.call(this, 'GET', `/conversations/${query}`),
+						);
+						return { results: conversation.id === undefined ? [] : [item(conversation)] };
+					} catch (error) {
+						if (readErrorInfo(error).status === 404) return { results: [] };
+						return handleApiError.call(this, error);
+					}
+				}
+				const page = pageOf(paginationToken);
+				const response = await wzApiRequest.call(this, 'GET', '/conversations', {
+					qs: { status: 'all', page },
+				});
+				const conversations = asArray(asObject(response).data ?? response);
+				const needle = query.toLowerCase();
+				const matches = needle
+					? conversations.filter((conversation) =>
+							String(asObject(asObject(conversation.meta).sender).name ?? '')
+								.toLowerCase()
+								.includes(needle),
+						)
+					: conversations;
+				return {
+					results: matches.map(item),
+					paginationToken: nextPage(page, conversations.length >= PAGE_SIZE),
+				};
+			},
+		},
+
 		resourceMapping: {
 			async getTemplateFields(this: ILoadOptionsFunctions): Promise<ResourceMapperFields> {
 				const inboxId = this.getCurrentNodeParameter('inboxId') as string | undefined;
@@ -964,12 +1126,21 @@ export class WebzzConnect implements INodeType {
 				// A person keeps the bare id (saved workflows still match); a virtual agent is typed.
 				return agents.map((agent) =>
 					agent.assignee_type === 'AgentBot'
-						? { name: `${String(agent.name)} (virtual agent)`, value: `AgentBot:${String(agent.id)}` }
+						? { name: `${String(agent.name)} (Virtual Agent)`, value: `AgentBot:${String(agent.id)}` }
 						: {
 								name: String(agent.available_name ?? agent.name ?? agent.email),
 								value: String(agent.id),
 							},
 				);
+			},
+
+			/** People of the account, for the deal owner. */
+			async getOwners(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const agents = asArray(await wzApiRequest.call(this, 'GET', '/agents'));
+				return agents.map((agent) => ({
+					name: String(agent.available_name ?? agent.name ?? agent.email),
+					value: String(agent.id),
+				}));
 			},
 
 			async getTeams(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
@@ -1004,6 +1175,9 @@ export class WebzzConnect implements INodeType {
 		const returnData: INodeExecutionData[] = [];
 		const resource = this.getNodeParameter('resource', 0) as string;
 		const operation = this.getNodeParameter('operation', 0) as string;
+		// Simplify exists from 1.2; older versions always return the raw data.
+		const simplifier =
+			this.getNode().typeVersion >= 1.2 ? simplifierFor(resource, operation) : undefined;
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -1026,7 +1200,7 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'createOrUpdate') {
 						result = await createOrUpdateContact.call(this, i);
 					} else if (operation === 'update') {
-						const id = pathId.call(this, this.getNodeParameter('contactId', i));
+						const id = idParam.call(this, 'contactId', i);
 						const fields = this.getNodeParameter('updateFields', i, {}) as IDataObject;
 						result = unwrapContact(
 							await wzApiRequest.call(this, 'PATCH', `/contacts/${id}`, {
@@ -1034,7 +1208,7 @@ export class WebzzConnect implements INodeType {
 							}),
 						);
 					} else if (operation === 'get') {
-						const id = pathId.call(this, this.getNodeParameter('contactId', i));
+						const id = idParam.call(this, 'contactId', i);
 						result = unwrapContact(await wzApiRequest.call(this, 'GET', `/contacts/${id}`));
 					} else if (operation === 'addLabels') {
 						result = await changeLabels.call(this, i, 'contacts', 'add');
@@ -1057,14 +1231,14 @@ export class WebzzConnect implements INodeType {
 					if (operation === 'create') {
 						const fields = this.getNodeParameter('additionalFields', i, {}) as IDataObject;
 						const body = dealBody({ ...fields, title: this.getNodeParameter('title', i) });
-						body.contact_id = this.getNodeParameter('contactId', i) as string;
+						body.contact_id = idParam.call(this, 'contactId', i);
 						const pipelineId = this.getNodeParameter('pipelineId', i, '') as string;
 						const stageId = this.getNodeParameter('stageId', i, '') as string;
 						if (pipelineId) body.pipeline_id = pipelineId;
 						if (stageId) body.stage_id = stageId;
 						result = asObject(await wzApiRequest.call(this, 'POST', '/crm/deals', { body }));
 					} else if (operation === 'update') {
-						const id = pathId.call(this, this.getNodeParameter('dealId', i));
+						const id = idParam.call(this, 'dealId', i);
 						const fields = this.getNodeParameter('updateFields', i, {}) as IDataObject;
 						result = asObject(
 							await wzApiRequest.call(this, 'PATCH', `/crm/deals/${id}`, {
@@ -1072,7 +1246,7 @@ export class WebzzConnect implements INodeType {
 							}),
 						);
 					} else if (operation === 'moveStage') {
-						const id = pathId.call(this, this.getNodeParameter('dealId', i));
+						const id = idParam.call(this, 'dealId', i);
 						const stageId = this.getNodeParameter('stageId', i) as string;
 						if (!stageId) {
 							throw new NodeOperationError(this.getNode(), 'Choose the stage to move the deal to', {
@@ -1089,7 +1263,7 @@ export class WebzzConnect implements INodeType {
 							await wzApiRequest.call(this, 'POST', `/crm/deals/${id}/move`, { body }),
 						);
 					} else if (operation === 'get') {
-						const id = pathId.call(this, this.getNodeParameter('dealId', i));
+						const id = idParam.call(this, 'dealId', i);
 						result = asObject(await wzApiRequest.call(this, 'GET', `/crm/deals/${id}`));
 					} else if (['addNote', 'getNotes', 'updateNote', 'deleteNote'].includes(operation)) {
 						result = await dealNote.call(this, i, operation);
@@ -1121,7 +1295,7 @@ export class WebzzConnect implements INodeType {
 						const content = this.getNodeParameter('content', i, '') as string;
 						const body: IDataObject = {
 							inbox_id: this.getNodeParameter('inboxId', i) as string,
-							contact_id: this.getNodeParameter('contactId', i) as string,
+							contact_id: idParam.call(this, 'contactId', i),
 						};
 						if (content) body.message = { content };
 						const status = this.getNodeParameter('initialStatus', i, '') as string;
@@ -1132,7 +1306,7 @@ export class WebzzConnect implements INodeType {
 					} else if (operation === 'sendMessage') {
 						result = await sendConversationMessage.call(this, i);
 					} else if (operation === 'get') {
-						const id = pathId.call(this, this.getNodeParameter('conversationId', i));
+						const id = idParam.call(this, 'conversationId', i);
 						result = asObject(await wzApiRequest.call(this, 'GET', `/conversations/${id}`));
 					} else if (operation === 'assign') {
 						result = await assignConversation.call(this, i);
@@ -1156,7 +1330,9 @@ export class WebzzConnect implements INodeType {
 							qs: compact({
 								status: (filters.status as string) || 'open',
 								inbox_id: filters.inboxId,
-								agent_id: filters.agentId ? pathId.call(this, filters.agentId) : undefined,
+								agent_id: filters.agentId
+									? pathId.call(this, filters.agentId, 'Virtual Agent ID')
+									: undefined,
 							}),
 							returnAll,
 							limit,
@@ -1168,7 +1344,12 @@ export class WebzzConnect implements INodeType {
 					result = await sendWhatsAppTemplate.call(this, i);
 				}
 
-				const cleaned = stripInternalKeys(result);
+				let cleaned = stripInternalKeys(result);
+				if (simplifier && this.getNodeParameter('simplify', i, false) === true) {
+					cleaned = Array.isArray(cleaned)
+						? cleaned.map((record) => simplifier(record))
+						: simplifier(cleaned);
+				}
 				const executionData = this.helpers.constructExecutionMetaData(
 					this.helpers.returnJsonArray(cleaned),
 					{ itemData: { item: i } },

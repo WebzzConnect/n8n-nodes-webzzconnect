@@ -43,7 +43,7 @@ export const COPY = {
 		'[422] This contact may already exist, but this virtual agent sees only the contacts of conversations it handles. To create or update contacts across the account, use an account key or an "as me" connection.',
 };
 
-const ERROR_COPY: Record<string, string> = {
+export const ERROR_COPY: Record<string, string> = {
 	'409:not_handling':
 		'[409] This virtual agent isn\'t handling this conversation any more: a person took it, it was handed off, or it\'s resolved. Stop the flow for this conversation. (not_handling)',
 	'422:assignee_not_available':
@@ -188,10 +188,17 @@ export async function getConnectionInfo(this: WzContext): Promise<IDataObject> {
  * An id for a request path. WebzzConnect ids are numbers; anything else (e.g. `5/../contacts/1`)
  * is refused before a request is made, so a mapped value can never change the path.
  */
-export function pathId(this: WzContext, value: unknown): string {
+export function pathId(this: WzContext, value: unknown, label?: string): string {
 	const id = String(value ?? '').trim();
 	if (!/^\d+$/.test(id)) {
-		throw new NodeOperationError(this.getNode(), `"${String(value)}" is not a valid ID (a number)`);
+		if (label) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`'${label}' must be a number, but got "${String(value)}"`,
+				{ description: 'Use the numeric ID shown in WebzzConnect, or map a number from an earlier node' },
+			);
+		}
+		throw new NodeOperationError(this.getNode(), `Expected a numeric ID, but got "${String(value)}"`);
 	}
 	return id;
 }
@@ -209,7 +216,10 @@ export function parseAssignee(
 	if (raw === '') return undefined;
 	const match = /^(?:(User|AgentBot):)?(\d+)$/.exec(raw);
 	if (!match) {
-		throw new NodeOperationError(this.getNode(), `"${raw}" is not a valid agent (a number, or AgentBot:number)`);
+		throw new NodeOperationError(
+			this.getNode(),
+			`'Agent Name or ID' must be a number, or AgentBot:number for a virtual agent, but got "${raw}". Choose the agent from the list.`,
+		);
 	}
 	if (/^0+$/.test(match[2])) throw new NodeOperationError(this.getNode(), COPY.assignNoTarget);
 	return { id: match[2], type: match[1] === 'AgentBot' ? 'AgentBot' : 'User' };
@@ -278,7 +288,7 @@ export function readErrorInfo(error: unknown): ErrorInfo {
 
 	return {
 		status: Number.isFinite(status) ? status : undefined,
-		message: message || err.description || err.message || 'Unknown error',
+		message: message || err.description || err.message || 'WebzzConnect gave no details about what went wrong',
 		retryAfter: retryAfter !== undefined ? String(retryAfter) : undefined,
 		body: bodyObject,
 	};
@@ -307,14 +317,14 @@ export function handleApiError(this: WzContext, error: unknown): never {
 		info.status !== 429
 	) {
 		// A coded refusal (plan area, plan limit, pipeline access, ...): the server's message is the
-		// product sentence, in the account's language.
+		// product sentence.
 		options.message = `[${info.status}] ${serverMessage} (${code})`;
 		if (CODE_DESCRIPTIONS[code]) options.description = CODE_DESCRIPTIONS[code];
 	} else if (info.status === 429) {
 		options.message = 'WebzzConnect rate limit reached';
 		options.description = info.retryAfter
-			? `Too many requests. WebzzConnect asks you to retry after ${info.retryAfter} seconds (Retry-After). Add a Wait node or enable "Retry On Fail" for this node.`
-			: 'Too many requests. Wait a moment and retry, or enable "Retry On Fail" for this node. Contact search is limited to 100 requests per minute per account.';
+			? `Too many requests. WebzzConnect asks you to retry after ${info.retryAfter} seconds (Retry-After). Add a Wait node or enable 'Retry On Fail' for this node.`
+			: "Too many requests. Wait a moment and retry, or enable 'Retry On Fail' for this node. Contact search is limited to 100 requests per minute per account.";
 	} else if (info.status === 403) {
 		options.message = `[403] This connection isn't allowed to do this. For a virtual agent its role decides; for an API key, its scopes and inboxes; for OAuth, what was approved at consent. (${info.message})`;
 	} else if (info.status === 401) {
@@ -344,7 +354,7 @@ export function assertNotFailed(
 	const text =
 		code === 'monthly_active_contacts_limit_reached'
 			? "The message wasn't sent: the account reached its monthly active contacts limit. An account owner can upgrade the plan."
-			: "The message wasn't sent.";
+			: "The message wasn't sent. Open the conversation in WebzzConnect to see the reason.";
 	throw new NodeOperationError(this.getNode(), `${text} (${code})`, { itemIndex });
 }
 
@@ -460,4 +470,63 @@ export function phonesMatch(a: string, b: string): boolean {
 	const sb = db.replace(/^0+/, '');
 	if (sa.length < 7 || sb.length < 7) return false;
 	return sa.endsWith(sb) || sb.endsWith(sa);
+}
+
+/** Content of the last entry of a conversation's `messages` (the API includes only the latest one). */
+function lastMessageContent(conversation: IDataObject): IDataObject[string] {
+	const messages = Array.isArray(conversation.messages) ? (conversation.messages as unknown[]) : [];
+	if (messages.length === 0) return null;
+	return asObject(messages[messages.length - 1]).content ?? null;
+}
+
+function pick(source: IDataObject, keys: string[]): IDataObject {
+	const out: IDataObject = {};
+	for (const key of keys) if (key in source) out[key] = source[key];
+	return out;
+}
+
+/** Simplify: the contact fields a flow usually needs (at most 10 keys). */
+export function simplifyContact(contact: IDataObject): IDataObject {
+	return pick(contact, [
+		'id',
+		'name',
+		'email',
+		'phone_number',
+		'identifier',
+		'blocked',
+		'custom_attributes',
+		'last_activity_at',
+		'created_at',
+	]);
+}
+
+/** Simplify: the deal fields a flow usually needs (at most 10 keys). */
+export function simplifyDeal(deal: IDataObject): IDataObject {
+	const out = pick(deal, ['id', 'title', 'value', 'currency', 'status', 'pipeline_id', 'stage_id']);
+	const contact = asObject(deal.contact);
+	out.contact =
+		Object.keys(contact).length > 0 ? pick(contact, ['id', 'name', 'phone_number', 'email']) : null;
+	const owner = asObject(deal.owner);
+	out.owner = Object.keys(owner).length > 0 ? pick(owner, ['id', 'name']) : null;
+	if ('updated_at' in deal) out.updated_at = deal.updated_at;
+	return out;
+}
+
+/** Simplify: the conversation fields a flow usually needs (at most 10 keys). */
+export function simplifyConversation(conversation: IDataObject): IDataObject {
+	const meta = asObject(conversation.meta);
+	const sender = asObject(meta.sender);
+	const assignee = asObject(meta.assignee);
+	return {
+		id: conversation.id,
+		status: conversation.status,
+		inbox_id: conversation.inbox_id,
+		contact: Object.keys(sender).length > 0 ? pick(sender, ['id', 'name', 'phone_number']) : null,
+		assignee: Object.keys(assignee).length > 0 ? pick(assignee, ['id', 'name']) : null,
+		labels: conversation.labels,
+		custom_attributes: conversation.custom_attributes,
+		last_message: lastMessageContent(conversation),
+		unread_count: conversation.unread_count,
+		last_activity_at: conversation.last_activity_at,
+	};
 }

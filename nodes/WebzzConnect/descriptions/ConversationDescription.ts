@@ -1,6 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
 import { labelFields } from './LabelFields';
+import { idField, simplifyField } from './Locators';
 
 const show = (operations: string[]) => ({ resource: ['conversation'], operation: operations });
 const showType = (types: string[]) => ({ ...show(['sendMessage']), messageType: types });
@@ -24,68 +25,68 @@ export const conversationOperations: INodeProperties[] = [
 				name: 'Add Labels',
 				value: 'addLabels',
 				description: 'Add labels to a conversation, keeping the labels it already has',
-				action: 'Add labels to a conversation',
+				action: 'Add labels to conversation',
 			},
 			{
 				name: 'Assign',
 				value: 'assign',
 				description: 'Assign a conversation to an agent and/or a team',
-				action: 'Assign a conversation',
+				action: 'Assign conversation',
 			},
 			{
 				name: 'Create',
 				value: 'create',
 				description: 'Start a conversation with a contact, optionally with a first message',
-				action: 'Create a conversation',
+				action: 'Create conversation',
 			},
 			{
 				name: 'Get',
 				value: 'get',
-				description: 'Get a conversation by its ID',
-				action: 'Get a conversation',
+				description: 'Retrieve a conversation',
+				action: 'Get conversation',
 			},
 			{
 				name: 'Get Many',
 				value: 'getAll',
-				description: 'List conversations',
+				description: 'Retrieve a list of conversations',
 				action: 'Get many conversations',
 			},
 			{
 				name: 'Remove Labels',
 				value: 'removeLabels',
 				description: 'Remove labels from a conversation, keeping its other labels',
-				action: 'Remove labels from a conversation',
+				action: 'Remove labels from conversation',
 			},
 			{
 				name: 'Send Message',
 				value: 'sendMessage',
 				description:
 					'Reply in a conversation. A virtual agent connection can send only into conversations the agent handles.',
-				action: 'Send a message in a conversation',
+				action: 'Send message in conversation',
 			},
 			{
 				name: 'Set Custom Attributes',
 				value: 'setCustomAttributes',
 				description: 'Set custom attributes on a conversation, keeping the other attributes',
-				action: 'Set custom attributes on a conversation',
+				action: 'Set custom attributes on conversation',
 			},
 			{
 				name: 'Set Labels',
 				value: 'setLabels',
 				description: 'Replace all labels of a conversation',
-				action: 'Set the labels of a conversation',
+				action: 'Set conversation labels',
 			},
 			{
 				name: 'Unassign',
 				value: 'unassign',
 				description: 'Remove the agent and/or the team from a conversation',
-				action: 'Unassign a conversation',
+				action: 'Unassign conversation',
 			},
 			{
 				name: 'Update Status',
 				value: 'updateStatus',
 				description: 'Open, resolve or snooze a conversation',
-				action: 'Update the status of a conversation',
+				action: 'Update conversation status',
 			},
 		],
 		default: 'sendMessage',
@@ -105,14 +106,12 @@ export const conversationFields: INodeProperties[] = [
 		description:
 			'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 	},
-	{
+	...idField({
 		displayName: 'Contact ID',
 		name: 'contactId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: { show: show(['create']) },
-	},
+		searchListMethod: 'searchContacts',
+		show: show(['create']),
+	}),
 	{
 		displayName: 'First Message',
 		name: 'content',
@@ -137,28 +136,27 @@ export const conversationFields: INodeProperties[] = [
 		description: STATUS_ON_SEND,
 	},
 
-	// get, sendMessage
-	{
+	// get, sendMessage and the other single-conversation operations
+	...idField({
 		displayName: 'Conversation ID',
 		name: 'conversationId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: {
-			show: show([
-				'get',
-				'sendMessage',
-				'assign',
-				'unassign',
-				'updateStatus',
-				'setCustomAttributes',
-				'addLabels',
-				'removeLabels',
-				'setLabels',
-			]),
-		},
+		searchListMethod: 'searchConversations',
+		show: show([
+			'get',
+			'sendMessage',
+			'assign',
+			'unassign',
+			'updateStatus',
+			'setCustomAttributes',
+			'addLabels',
+			'removeLabels',
+			'setLabels',
+		]),
 		description: 'The conversation number shown in WebzzConnect',
-	},
+		listHint:
+			'Search by contact name or conversation number. By ID takes the conversation number shown in WebzzConnect.',
+	}),
+	simplifyField(show(['get', 'getAll'])),
 	{
 		displayName: 'Message Type',
 		name: 'messageType',
@@ -194,14 +192,14 @@ export const conversationFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['sendMessage']) },
 		description:
-			'The message text, or the caption when a file is attached. Required unless a File URL is given. For buttons, a list or a link button this is the message body and is required.',
+			"The message text, or the caption when a file is attached. Required unless a 'File URL' is given. For buttons, a list or a link button this is the message body and is required.",
 	},
 	{
 		displayName: 'File URL',
 		name: 'fileUrl',
 		type: 'string',
 		default: '',
-		placeholder: 'https://example.com/invoice.pdf',
+		placeholder: 'e.g. https://example.com/invoice.pdf',
 		displayOptions: { show: showType(['text']) },
 		description:
 			'Optional. A public link to a file (image, PDF, audio, video). WebzzConnect downloads it and attaches it to the message. The file name is taken from the URL. Private or internal addresses are refused.',
@@ -327,7 +325,7 @@ export const conversationFields: INodeProperties[] = [
 		name: 'ctaUrl',
 		type: 'string',
 		default: '',
-		placeholder: 'https://example.com/pay',
+		placeholder: 'e.g. https://example.com/pay',
 		displayOptions: { show: showType(['cta_url']) },
 		description: 'The address the button opens (http or https)',
 	},
@@ -351,16 +349,16 @@ export const conversationFields: INodeProperties[] = [
 				name: 'headerMediaUrl',
 				type: 'string',
 				default: '',
-				placeholder: 'https://example.com/intro.mp4',
+				placeholder: 'e.g. https://example.com/video.mp4',
 				description:
-					'A public link to the header image, video or document (Header Type Image, Video or Document). Not for lists.',
+					"A public link to the header image, video or document ('Header Type' Image, Video or Document). Not for lists.",
 			},
 			{
 				displayName: 'Header Text',
 				name: 'headerText',
 				type: 'string',
 				default: '',
-				description: 'The header text when Header Type is Text, up to 60 characters',
+				description: "The header text when 'Header Type' is Text, up to 60 characters",
 			},
 			{
 				displayName: 'Header Type',
@@ -428,7 +426,7 @@ export const conversationFields: INodeProperties[] = [
 		default: false,
 		displayOptions: { show: show(['setLabels']) },
 		description:
-			'Whether to remove every label from the conversation. Without this, an empty label list is refused, so an empty expression never clears labels by mistake.',
+			'Whether to remove every label from the conversation. Without this, an empty label list is refused, so an empty expression never clears labels unintentionally.',
 	},
 	...labelFields('conversation', 'setLabels', { clearAll: [false] }),
 
@@ -559,7 +557,11 @@ export const conversationFields: INodeProperties[] = [
 				options: [
 					{ name: 'All', value: 'all' },
 					{ name: 'Open', value: 'open' },
-					{ name: 'Pending (Both)', value: 'pending' },
+					{
+						name: 'Pending (Both)',
+						value: 'pending',
+						description: 'Waiting on customer or with a virtual agent',
+					},
 					{ name: 'Resolved', value: 'resolved' },
 					{ name: 'Snoozed', value: 'snoozed' },
 					{ name: 'Waiting on Customer', value: 'waiting_on_customer' },
@@ -567,7 +569,7 @@ export const conversationFields: INodeProperties[] = [
 				],
 				default: 'open',
 				description:
-					'With a virtual agent connection you find only the conversations the agent handles. Choose With a Virtual Agent or All; Open finds none.',
+					"With a virtual agent connection you find only the conversations the agent handles. Choose 'With a Virtual Agent' or 'All'; 'Open' finds none.",
 			},
 			{
 				displayName: 'Virtual Agent ID',

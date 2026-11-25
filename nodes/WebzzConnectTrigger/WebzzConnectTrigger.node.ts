@@ -148,7 +148,7 @@ export class WebzzConnectTrigger implements INodeType {
 						name: 'New Message',
 						value: 'message_created',
 						description:
-							'With a virtual agent connection you receive only the conversations the agent handles. When a person replies from the dashboard or app, they take the conversation over and its events stop. To see who handles a conversation, read its assignee and assignee type. A tap on a reply button or list row arrives with its ID in button_payload; compare it with Equals and keep a fallback, never use it in a Code node, a URL or an ID field. Flows on an account key: a person replied when message_type is outgoing, private is false, content_attributes.automation_rule_id is empty, and sender.type is "user" or content_attributes.external_echo is true. WhatsApp campaign and scheduled template sends arrive with message_type "template", so they never match.',
+							'With a virtual agent connection you receive only the conversations the agent handles. A tap on a reply button or list row arrives with its ID in button_payload.',
 					},
 				],
 				description:

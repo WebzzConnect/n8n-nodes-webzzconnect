@@ -1,6 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
 import { labelFields } from './LabelFields';
+import { idField, simplifyField } from './Locators';
 
 const show = (operations: string[]) => ({ resource: ['contact'], operation: operations });
 
@@ -16,38 +17,38 @@ export const contactOperations: INodeProperties[] = [
 				name: 'Add Labels',
 				value: 'addLabels',
 				description: 'Add labels to a contact, keeping the labels it already has',
-				action: 'Add labels to a contact',
+				action: 'Add labels to contact',
 			},
 			{
 				name: 'Create',
 				value: 'create',
 				description: 'Create a contact',
-				action: 'Create a contact',
+				action: 'Create contact',
 			},
 			{
 				name: 'Create or Update',
 				value: 'createOrUpdate',
 				description: 'Find a contact by email or phone and update it, or create it',
-				action: 'Create or update a contact',
+				action: 'Create or update contact',
 			},
-			{ name: 'Get', value: 'get', description: 'Get a contact by ID', action: 'Get a contact' },
+			{ name: 'Get', value: 'get', description: 'Retrieve a contact', action: 'Get contact' },
+			{
+				name: 'Get Many',
+				value: 'search',
+				description: 'Retrieve a list of contacts matching a name, email or phone',
+				action: 'Get many contacts',
+			},
 			{
 				name: 'Remove Labels',
 				value: 'removeLabels',
 				description: 'Remove labels from a contact, keeping its other labels',
-				action: 'Remove labels from a contact',
-			},
-			{
-				name: 'Search',
-				value: 'search',
-				description: 'Search contacts by name, email or phone',
-				action: 'Search contacts',
+				action: 'Remove labels from contact',
 			},
 			{
 				name: 'Update',
 				value: 'update',
 				description: 'Update a contact',
-				action: 'Update a contact',
+				action: 'Update contact',
 			},
 		],
 		default: 'create',
@@ -114,7 +115,7 @@ export const contactFields: INodeProperties[] = [
 		displayName: 'Email',
 		name: 'email',
 		type: 'string',
-		placeholder: 'name@email.com',
+		placeholder: 'e.g. nathan@example.com',
 		default: '',
 		displayOptions: { show: show(['create', 'createOrUpdate']) },
 		description: 'At least an email or a phone number is required for Create or Update',
@@ -124,7 +125,7 @@ export const contactFields: INodeProperties[] = [
 		name: 'phoneNumber',
 		type: 'string',
 		default: '',
-		placeholder: '+972501234567',
+		placeholder: 'e.g. +972501234567',
 		displayOptions: { show: show(['create', 'createOrUpdate']) },
 		description:
 			'International format is best. A national format such as 050-1234567 is normalized by WebzzConnect.',
@@ -147,14 +148,13 @@ export const contactFields: INodeProperties[] = [
 	},
 
 	// get + update
-	{
+	...idField({
 		displayName: 'Contact ID',
 		name: 'contactId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: { show: show(['get', 'update', 'addLabels', 'removeLabels']) },
-	},
+		searchListMethod: 'searchContacts',
+		show: show(['get', 'update', 'addLabels', 'removeLabels']),
+	}),
+	simplifyField(show(['get', 'search'])),
 	{
 		displayName: 'Update Fields',
 		name: 'updateFields',
@@ -167,7 +167,7 @@ export const contactFields: INodeProperties[] = [
 				displayName: 'Email',
 				name: 'email',
 				type: 'string',
-				placeholder: 'name@email.com',
+				placeholder: 'e.g. nathan@example.com',
 				default: '',
 			},
 			{ displayName: 'Name', name: 'name', type: 'string', default: '' },
