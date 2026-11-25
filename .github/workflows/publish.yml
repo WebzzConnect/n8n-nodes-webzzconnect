@@ -99,3 +99,24 @@ jobs:
           npm run release
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  scan:
+    # n8n's security scan reads the published npm package, so it runs after the publish.
+    # A failure here is a signal to fix and release again; the version is already on npm.
+    name: Scan the published package
+    needs: publish
+    runs-on: ubuntu-latest
+    container: node:24-bookworm
+    permissions:
+      contents: read
+    steps:
+      - name: Run n8n's community package scan
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package="@webzzconnect/n8n-nodes-webzzconnect@${version}"
+          # The registry can take a moment to serve a version that was just published.
+          for attempt in 1 2 3 4 5; do
+            npm view "$package" version >/dev/null 2>&1 && break
+            sleep 30
+          done
+          npx -y @n8n/scan-community-package@latest "$package"
