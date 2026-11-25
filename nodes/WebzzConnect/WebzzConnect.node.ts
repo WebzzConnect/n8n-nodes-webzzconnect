@@ -69,6 +69,8 @@ function idParam(this: IExecuteFunctions, name: string, i: number): string {
 
 const PAGE_SIZE = 25;
 const CONTACTS_PAGE_SIZE = 100;
+/** Conversation search by text looks at the conversations of this many matching contacts. */
+const CONTACTS_SEARCHED_FOR_CONVERSATIONS = 5;
 
 function compact(values: IDataObject): IDataObject {
 	const out: IDataObject = {};
@@ -974,7 +976,10 @@ export class WebzzConnect implements INodeType {
 				return { results, paginationToken: nextPage(page, deals.length >= PAGE_SIZE) };
 			},
 
-			/** Conversations by contact name (filtered per page), or one conversation by its number. */
+			/**
+			 * One conversation by its number; by text, the conversations of the first matching contacts
+			 * (newest activity first, no further pages); without a filter, all conversations page by page.
+			 */
 			async searchConversations(
 				this: ILoadOptionsFunctions,
 				filter?: string,
@@ -1003,21 +1008,33 @@ export class WebzzConnect implements INodeType {
 						return handleApiError.call(this, error);
 					}
 				}
+				if (query) {
+					const contacts = asArray(
+						await wzApiRequest.call(this, 'GET', '/contacts/search', { qs: { q: query, page: 1 } }),
+					).slice(0, CONTACTS_SEARCHED_FOR_CONVERSATIONS);
+					const lists = await Promise.all(
+						contacts.map(async (contact) =>
+							asArray(
+								await wzApiRequest.call(
+									this,
+									'GET',
+									`/contacts/${pathId.call(this, contact.id)}/conversations`,
+								),
+							),
+						),
+					);
+					const conversations = lists
+						.flat()
+						.sort((a, b) => Number(b.last_activity_at ?? 0) - Number(a.last_activity_at ?? 0));
+					return { results: conversations.map(item) };
+				}
 				const page = pageOf(paginationToken);
 				const response = await wzApiRequest.call(this, 'GET', '/conversations', {
 					qs: { status: 'all', page },
 				});
 				const conversations = asArray(asObject(response).data ?? response);
-				const needle = query.toLowerCase();
-				const matches = needle
-					? conversations.filter((conversation) =>
-							String(asObject(asObject(conversation.meta).sender).name ?? '')
-								.toLowerCase()
-								.includes(needle),
-						)
-					: conversations;
 				return {
-					results: matches.map(item),
+					results: conversations.map(item),
 					paginationToken: nextPage(page, conversations.length >= PAGE_SIZE),
 				};
 			},

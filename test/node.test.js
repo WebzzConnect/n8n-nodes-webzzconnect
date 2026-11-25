@@ -1372,6 +1372,22 @@ test('Simplify: trims Contact Get, Deal Get and Conversation Get Many to at most
 		unread_count: 2, last_activity_at: 3,
 	});
 	for (const item of [simple, (await deal(true)).items[0], conversation]) assert.ok(Object.keys(item).length <= 10);
+	// The last entry of messages can be an activity: last_non_activity_message wins when present.
+	const withActivity = {
+		...RAW_CONVERSATION,
+		messages: [{ id: 71, content: 'Assigned to Maya by Default Policy', message_type: 2 }],
+		last_non_activity_message: { id: 70, content: 'Hi there', message_type: 0 },
+	};
+	const activity = await run12({
+		parameters: { resource: 'conversation', operation: 'get', conversationId: rl('4'), simplify: true },
+		respond: () => withActivity,
+	});
+	assert.equal(activity.items[0].last_message, 'Hi there');
+	const noMessages = await run12({
+		parameters: { resource: 'conversation', operation: 'get', conversationId: rl('4'), simplify: true },
+		respond: () => ({ ...RAW_CONVERSATION, messages: [], last_non_activity_message: null }),
+	});
+	assert.equal(noMessages.items[0].last_message, null);
 	assert.deepEqual((await many(false)).items[0], RAW_CONVERSATION);
 	assert.deepEqual((await many(true, 1)).items[0], RAW_CONVERSATION);
 });
@@ -1423,7 +1439,7 @@ test('listSearch searchContacts: search with a filter, the contact list without;
 	assert.equal((await methods.searchContacts.call(short.ctx)).paginationToken, undefined);
 });
 
-test('listSearch searchConversations: a number is one GET (404 is empty); text filters a page by contact name', async () => {
+test('listSearch searchConversations: a number is one GET (404 is empty); text searches contacts, then their conversations', async () => {
 	const methods = new WebzzConnect().methods.listSearch;
 	const one = listContext(() => RAW_CONVERSATION);
 	assert.deepEqual(await methods.searchConversations.call(one.ctx, '4'), {
@@ -1434,12 +1450,43 @@ test('listSearch searchConversations: a number is one GET (404 is empty); text f
 	const missing = listContext(() => refusal(404, { error: 'Resource could not be found' }));
 	assert.deepEqual(await methods.searchConversations.call(missing.ctx, '999'), { results: [] });
 
-	const other = { ...RAW_CONVERSATION, id: 8, meta: { sender: { id: 6, name: 'Eli' } } };
-	const page = listContext(() => ({ data: { meta: {}, payload: [RAW_CONVERSATION, other] } }));
-	const result = await methods.searchConversations.call(page.ctx, 'DAN');
-	assert.deepEqual(page.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [`GET ${C} {"status":"all","page":1}`]);
-	assert.deepEqual(result.results.map((r) => r.value), ['4']);
-	assert.equal(result.paginationToken, undefined);
+	// Text: the first page of matching contacts, the conversations of the first five, newest activity first.
+	const contacts = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, name: `Dana ${index}` }));
+	const conversationsOf = {
+		1: [{ id: 40, status: 'open', last_activity_at: 100, meta: { sender: { name: 'Dana 0' } } }],
+		2: [
+			{ id: 41, status: 'resolved', last_activity_at: 300, meta: { sender: { name: 'Dana 1' } } },
+			{ id: 42, status: 'open', last_activity_at: 50, meta: { sender: { name: 'Dana 1' } } },
+		],
+		3: [],
+		4: [{ id: 43, status: 'pending', last_activity_at: 200, meta: { sender: { name: 'Dana 3' } } }],
+		5: [],
+	};
+	const byText = listContext((options) => {
+		if (options.url.endsWith('/contacts/search')) return { meta: { has_more: true }, payload: contacts };
+		const id = /\/contacts\/(\d+)\/conversations$/.exec(options.url)[1];
+		return { payload: conversationsOf[id] };
+	});
+	const result = await methods.searchConversations.call(byText.ctx, 'dana', '3');
+	const urls = byText.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs ?? null)}`);
+	assert.deepEqual(urls[0], `GET ${BASE}/api/v1/accounts/7/contacts/search {"q":"dana","page":1}`);
+	assert.deepEqual(urls.slice(1).sort(), [1, 2, 3, 4, 5].map((id) => `GET ${BASE}/api/v1/accounts/7/contacts/${id}/conversations null`));
+	assert.deepEqual(result, {
+		results: [
+			{ name: '#41 · Dana 1 · resolved', value: '41', url: `${C.replace('/api/v1', '/app')}/41` },
+			{ name: '#43 · Dana 3 · pending', value: '43', url: `${C.replace('/api/v1', '/app')}/43` },
+			{ name: '#40 · Dana 0 · open', value: '40', url: `${C.replace('/api/v1', '/app')}/40` },
+			{ name: '#42 · Dana 1 · open', value: '42', url: `${C.replace('/api/v1', '/app')}/42` },
+		],
+	});
+
+	// No filter: all conversations, page by page.
+	const full = Array.from({ length: 25 }, (_, index) => ({ ...RAW_CONVERSATION, id: index + 1 }));
+	const page = listContext(() => ({ data: { meta: {}, payload: full } }));
+	const listed = await methods.searchConversations.call(page.ctx, '', '2');
+	assert.deepEqual(page.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [`GET ${C} {"status":"all","page":2}`]);
+	assert.equal(listed.results.length, 25);
+	assert.equal(listed.paginationToken, '3');
 });
 
 test('listSearch searchDeals and getOwners: /crm/deals with q and page, people from /agents', async () => {

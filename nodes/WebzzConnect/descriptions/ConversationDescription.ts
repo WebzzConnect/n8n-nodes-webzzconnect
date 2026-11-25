@@ -154,7 +154,7 @@ export const conversationFields: INodeProperties[] = [
 		]),
 		description: 'The conversation number shown in WebzzConnect',
 		listHint:
-			'Search by contact name or conversation number. By ID takes the conversation number shown in WebzzConnect.',
+			'Search by contact name, email or phone (the latest conversations of the first five matching contacts), or by conversation number. By ID takes the conversation number shown in WebzzConnect.',
 	}),
 	simplifyField(show(['get', 'getAll'])),
 	{

@@ -472,8 +472,13 @@ export function phonesMatch(a: string, b: string): boolean {
 	return sa.endsWith(sb) || sb.endsWith(sa);
 }
 
-/** Content of the last entry of a conversation's `messages` (the API includes only the latest one). */
+/**
+ * The latest customer or agent message: `last_non_activity_message`, else the last entry of
+ * `messages` (which can be an activity such as an assignment note).
+ */
 function lastMessageContent(conversation: IDataObject): IDataObject[string] {
+	const latest = asObject(conversation.last_non_activity_message);
+	if (latest.content !== undefined && latest.content !== null) return latest.content;
 	const messages = Array.isArray(conversation.messages) ? (conversation.messages as unknown[]) : [];
 	if (messages.length === 0) return null;
 	return asObject(messages[messages.length - 1]).content ?? null;
