@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+- **Node version 1.2.** New WebzzConnect nodes are version 1.2. Workflows made before 0.7.0 keep their version and behave as before.
+- **Pick records from a list.** Contact ID, Deal ID and Conversation ID offer **From List** or **By ID** (version 1.2). Contacts are searched by name, email or phone, deals by title or contact name, conversations by contact name or conversation number. An expression can still give the ID.
+- **Deal owner picker.** Deal Create and Update pick the **Owner** from the account's people (version 1.2).
+- **Simplify.** Get and Get Many of contacts, deals and conversations have **Simplify**, on by default in version 1.2: it returns the fields a flow usually needs (at most 10) instead of the full record. Older versions return the raw data.
+- **Connection in the Resource list.** Connection > **Get Info** was documented but missing from the Resource list. It is now there.
+- **Names.** Contact and Deal **Search** are now **Get Many**, and the deal product line operations are **Add Product Line**, **Get Product Lines**, **Update Product Line** and **Delete Product Line**. Saved workflows keep working: only the names changed.
+- **Clearer errors.** Refusals name the field to fix and say what to do, e.g. `'Contact ID' must be a number, but got "abc"`. A Contact ID, Deal ID or Conversation ID that isn't a number is now refused before any request in Deal Create, Conversation Create and WhatsApp Template Send too.
+- Descriptions, placeholders and template field names follow n8n's style guide. The New Message trigger description is shorter; the details are in the README.
+
 ## 0.6.0
 
 - **Labels on contacts.** New Contact > **Add Labels** and **Remove Labels**. The contact keeps its other labels. Needs the contacts view and edit permissions.

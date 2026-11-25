@@ -57,17 +57,17 @@ Both credentials also work with n8n's HTTP Request node (**Predefined Credential
 - Create
 - Update
 - Get
-- Search (by name, email or phone)
+- Get Many (by name, email or phone)
 - Create or Update: finds an existing contact by exact email or by phone number (national formats such as `050-1234567` match the stored international number), updates it, or creates a new one. Running it twice with the same data never creates a duplicate.
 - Add Labels / Remove Labels (the contact keeps its other labels; needs the contacts view and edit permissions)
 
 **Deal**
-- Create (pick the pipeline and stage from your own lists)
+- Create (pick the pipeline and stage from your own lists, and from node version 1.2 the owner from your account's people)
 - Update
 - Move Stage (including won and lost, with an optional lost reason and note)
 - Get
-- Search (query, contact, pipeline, stage, owner, status)
-- Add Product, Get Products, Update Product, Delete Product (deal product lines: pick a product from your catalog, or enter a custom line with a name and unit price; Quantity defaults to 1). Once a deal has product lines, its value is the sum of its lines and the Value field in Create and Update is ignored. Removing the last line keeps the last total.
+- Get Many (query, contact, pipeline, stage, owner, status)
+- Add Product Line, Get Product Lines, Update Product Line, Delete Product Line (deal product lines: pick a product from your catalog, or enter a custom line with a name and unit price; Quantity defaults to 1). Once a deal has product lines, its value is the sum of its lines and the Value field in Create and Update is ignored. Removing the last line keeps the last total.
 - Add Note, Get Notes, Update Note, Delete Note (deal notes also show on the contact's notes). Only the connection or person that wrote a note, or an administrator, can change or delete it; a note written through an API key belongs to that key.
 
 Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `name`, `ad`: where the lead came from) and `created` (`kind`, `by`: how the deal was made). The older `source` field is no longer sent by WebzzConnect; workflows that read `$json.source` should read `original_source` instead.
@@ -96,7 +96,13 @@ Deal outputs and deal trigger events carry `original_source` (`kind`, `id`, `nam
 **Custom API Call**
 - For an endpoint the node doesn't cover, pick **Custom API Call** in the node's actions. It opens an HTTP Request node. Set **Authentication** to *Predefined Credential Type*, choose **WebzzConnect API** (or **WebzzConnect OAuth2 API**), and call `https://app.webzz.io/api/v1/accounts/<account id>/...`.
 
-List-style operations have **Return All** and **Limit**. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect, in the account's language; a refusal with a code shows as `[status] message (code)`; a rate-limit error tells you how long to wait.
+List-style operations have **Return All** and **Limit**. Get and Get Many of contacts, deals and conversations have **Simplify** (node version 1.2, on by default): it returns the fields a flow usually needs (at most 10) instead of the full record. Turn it off for the raw data. Fields that WebzzConnect uses internally (names starting with `wz_`) are removed from the output. Errors show the message from WebzzConnect; a refusal with a code shows as `[status] message (code)`; a rate-limit error tells you how long to wait.
+
+**Picking records.** From node version 1.2, Contact ID, Deal ID and Conversation ID offer **From List** (search contacts by name, email or phone; deals by title or contact name; conversations by contact name or conversation number) or **By ID**. An expression can still give the ID.
+
+## Node versions
+
+New WebzzConnect nodes are version 1.2: record ID pickers (From List or By ID), the deal owner picker and **Simplify**. Workflows made with an older version keep it and behave as before: versions 1 and 1.1 keep the plain ID text fields and return the raw data. Version 1.1 (0.6.0) added the label picker; version 1 keeps the comma-separated Labels text field.
 
 ## Trigger
 
@@ -104,7 +110,7 @@ List-style operations have **Return All** and **Limit**. Fields that WebzzConnec
 
 - New Conversation, Conversation Status Changed, Conversation Updated
 - Conversation Handed Off: a virtual agent handed a conversation to a person, another virtual agent or the team. The output has `handoff.from`, `handoff.to` (type agent, person or team; no ID or name for the team), `handoff.note` and `handoff.waiting_message`, each possibly null. It is sent at least once: skip a repeat with the same waiting message ID, when there is one.
-- New Message (filter by direction; new triggers default to Incoming, which keeps a reply bot from answering its own messages and their status updates). The output has a top-level `button_payload`: the ID of the tapped reply button or list row, the text (or payload) of a template quick reply, or `null` for typed text, so a Switch node can branch on `{{$json.button_payload}}`.
+- New Message (filter by direction; new triggers default to Incoming, which keeps a reply bot from answering its own messages and their status updates). The output has a top-level `button_payload`: the ID of the tapped reply button or list row, the text (or payload) of a template quick reply, or `null` for typed text, so a Switch node can branch on `{{$json.button_payload}}`. With a virtual agent connection you receive only the conversations the agent handles: when a person replies from the dashboard or app, they take the conversation over and its events stop. To see who handles a conversation, read its assignee and assignee type.
 - Contact Created, Contact Updated
 - Deal Created, Deal Updated, Deal Stage Changed, Deal Won, Deal Lost, Deal Deleted
 
