@@ -840,6 +840,7 @@ export class WebzzConnect implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
+					{ name: 'Connection', value: 'connection' },
 					{ name: 'Contact', value: 'contact' },
 					{ name: 'Conversation', value: 'conversation' },
 					{ name: 'Deal', value: 'deal' },
