@@ -101,14 +101,19 @@ test('errorForItem: keeps the item index on a NodeOperationError and wraps raw e
 
 // --- WebzzConnect node: CRM URLs and authentication ---
 
-function execContext({ parameters, response = {}, authentication = 'oAuth2', calls }) {
+// Like n8n, extractValue turns a resource locator value ({ __rl, mode, value }) into its value.
+function extract(value, options) {
+	return options?.extractValue && value && typeof value === 'object' && value.__rl ? value.value : value;
+}
+
+function execContext({ parameters, response = {}, authentication = 'oAuth2', calls, typeVersion = 1 }) {
 	return {
-		getNode: () => node,
+		getNode: () => ({ ...node, typeVersion }),
 		getInputData: () => [{ json: {} }],
 		continueOnFail: () => false,
-		getNodeParameter: (name, _i, fallback) => {
+		getNodeParameter: (name, _i, fallback, options) => {
 			if (name === 'authentication') return authentication;
-			return name in parameters ? parameters[name] : fallback;
+			return name in parameters ? extract(parameters[name], options) : fallback;
 		},
 		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
 		helpers: {
@@ -479,7 +484,7 @@ test('loadOptions: getAgents lists people and typed virtual agents, getTeams use
 	const methods = new WebzzConnect().methods.loadOptions;
 	assert.deepEqual(await methods.getAgents.call(ctx), [
 		{ name: 'Dana', value: '11' },
-		{ name: 'Sales bot (virtual agent)', value: 'AgentBot:5' },
+		{ name: 'Sales bot (Virtual Agent)', value: 'AgentBot:5' },
 	]);
 	assert.deepEqual(await methods.getTeams.call(ctx), [{ name: 'Sales', value: '3' }]);
 	assert.deepEqual(calls[0], {
@@ -553,7 +558,10 @@ test('sends: a message WebzzConnect refused at once (status failed) fails the st
 		assert.match(error.message, /monthly active contacts limit.*\(monthly_active_contacts_limit_reached\)$/);
 		return true;
 	});
-	await assert.rejects(send({ id: 1, status: 'failed' }), /The message wasn't sent\. \(failed\)$/);
+	await assert.rejects(
+		send({ id: 1, status: 'failed' }),
+		/The message wasn't sent\. Open the conversation in WebzzConnect to see the reason\. \(failed\)$/,
+	);
 	assert.equal((await send({ id: 1, status: 'sent' })).out[0].status, 'sent');
 	assert.equal((await send({ id: 1 })).out[0].id, 1);
 
@@ -599,7 +607,10 @@ test('updateStatus: snoozed_until is Unix seconds, and omitted when empty or not
 	assert.deepEqual(await snooze({ status: 'snoozed', snoozeUntil: '' }), { status: 'snoozed' });
 	assert.deepEqual(await snooze({ status: 'snoozed' }), { status: 'snoozed' });
 	assert.deepEqual(await snooze({ status: 'open', snoozeUntil: '2026-11-01T10:00:00.000Z' }), { status: 'open' });
-	await assert.rejects(snooze({ status: 'snoozed', snoozeUntil: 'soon' }), /not a valid date/);
+	await assert.rejects(
+		snooze({ status: 'snoozed', snoozeUntil: 'soon' }),
+		/'Snooze Until' must be a date and time, e\.g\. 2026-12-01T09:00:00, but got "soon"$/,
+	);
 });
 
 test('sendMessage: text only keeps the old body and sends no upload', async () => {
@@ -632,7 +643,7 @@ test('sendMessage: a file URL is uploaded first, then sent as attachments with a
 });
 
 test('sendMessage: no text and no file, or a non-http URL, is a clear error and sends nothing', async () => {
-	await assert.rejects(runConversation('sendMessage', { conversationId: '4', content: '' }), /Enter a message, a File URL, or both/);
+	await assert.rejects(runConversation('sendMessage', { conversationId: '4', content: '' }), /Enter a 'Message', a 'File URL', or both/);
 	await assert.rejects(runConversation('sendMessage', { conversationId: '4', fileUrl: 'ftp://x/y' }), /must start with http/);
 });
 
@@ -733,7 +744,7 @@ test('template send: expression-mapped template keeps working with positional Bo
 test('template send: missing field values and a wrong positional count are clear errors', async () => {
 	await assert.rejects(
 		sendTemplate({ template: 'promo::en', templateFields: { value: { body_code: 'X1' } } }),
-		/Missing value for: Header text variable, Body variable first_name, Button 2 URL variable/,
+		/Fill in these 'Template Fields': Header Text Variable, Body Variable first_name, Button 2 URL Variable/,
 	);
 	await assert.rejects(
 		sendTemplate({ template: 'invoice::he', templateFields: { value: { header_media_url: 'u', button_code_1: 'c' } }, 'bodyVariables.values': [{ value: 'a' }, { value: 'b' }] }),
@@ -821,7 +832,7 @@ test('sendMessage: list with a media header, a missing body or a missing media U
 		run({ messageType: 'list', content: 'x', rows: { values: [{ title: 'a' }] }, interactiveOptions: { headerType: 'image', headerMediaUrl: 'https://x.com/a.png' } }),
 		/A list can only have a text header/,
 	);
-	await assert.rejects(run({ messageType: 'button', content: '', buttons: { values: [{ title: 'a' }] } }), /Enter the Message/);
+	await assert.rejects(run({ messageType: 'button', content: '', buttons: { values: [{ title: 'a' }] } }), /Enter the 'Message'/);
 	await assert.rejects(
 		run({ messageType: 'button', content: 'x', buttons: { values: [{ title: 'a' }] }, interactiveOptions: { headerType: 'image' } }),
 		/Header Media URL/,
@@ -829,7 +840,7 @@ test('sendMessage: list with a media header, a missing body or a missing media U
 	for (const headerType of [undefined, 'none', 'text']) {
 		await assert.rejects(
 			run({ messageType: 'button', content: 'x', buttons: { values: [{ title: 'a' }] }, interactiveOptions: { headerType, headerText: 'Hi', headerMediaUrl: 'https://x.com/a.png' } }),
-			/Choose Header Type Image, Video or Document to use Header Media URL/,
+			/Choose 'Header Type' Image, Video or Document to use 'Header Media URL'/,
 		);
 	}
 	assert.equal(calls.length, 0);
@@ -890,7 +901,8 @@ test('ids in request paths: a non-numeric id is refused before any request', asy
 	const ctx = execContext({ parameters: { resource: 'conversation', operation: 'get', conversationId: '5/../../contacts/1' }, calls });
 	await assert.rejects(new WebzzConnect().execute.call(ctx), (error) => {
 		assert.ok(error instanceof NodeOperationError);
-		assert.match(error.message, /is not a valid ID/);
+		assert.match(error.message, /^'Conversation ID' must be a number, but got "5\/\.\.\/\.\.\/contacts\/1"$/);
+		assert.match(error.description, /Use the numeric ID shown in WebzzConnect/);
 		return true;
 	});
 	assert.equal(calls.length, 0);
@@ -1107,7 +1119,7 @@ test('labels: v1 text and v1.1 list give the same normalized titles', async () =
 	assert.equal(list.calls[0].body.labels.join(), 'vip,x');
 });
 
-test('loadOptions getLabels: titles from /labels, sorted; node is version 1 and 1.1', async () => {
+test('loadOptions getLabels: titles from /labels, sorted; node is version 1, 1.1 and 1.2', async () => {
 	const calls = [];
 	const ctx = {
 		getNode: () => node,
@@ -1124,7 +1136,7 @@ test('loadOptions getLabels: titles from /labels, sorted; node is version 1 and 
 	const options = await new WebzzConnect().methods.loadOptions.getLabels.call(ctx);
 	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/labels`]);
 	assert.deepEqual(options, [{ name: 'hot-lead', value: 'hot-lead' }, { name: 'vip', value: 'vip' }]);
-	assert.deepEqual(new WebzzConnect().description.version, [1, 1.1]);
+	assert.deepEqual(new WebzzConnect().description.version, [1, 1.1, 1.2]);
 	const labelProps = new WebzzConnect().description.properties.filter((p) => p.name === 'labels');
 	assert.ok(labelProps.some((p) => p.type === 'string' && p.displayOptions.show['@version'][0] === 1));
 	assert.ok(labelProps.some((p) => p.type === 'multiOptions' && p.displayOptions.hide['@version'][0] === 1));
@@ -1137,7 +1149,7 @@ test('conversation setLabels: Clear All Labels must be a real true', async () =>
 		await assert.rejects(new WebzzConnect().execute.call(ctx), /Enter at least one label/);
 		assert.equal(calls.length, 0);
 	}
-	assert.equal(new WebzzConnect().description.defaultVersion, 1.1);
+	assert.equal(new WebzzConnect().description.defaultVersion, 1.2);
 });
 
 // --- Deal notes (0.6.0) ---
@@ -1228,8 +1240,8 @@ test('deal products: refusals before any request', async () => {
 		['addProduct', { dealId: '5', productId: '', lineFields: { name: 'Setup' } }, /Choose a product/],
 		['addProduct', { dealId: '5', productId: '', lineFields: { unitPrice: 10 } }, /Choose a product/],
 		['updateProduct', { dealId: '5', lineId: '3', lineUpdateFields: {} }, /at least one field/],
-		['deleteProduct', { dealId: '5', lineId: '3/../9' }, /not a valid ID/],
-		['deleteNote', { dealId: 'abc', noteId: '1' }, /not a valid ID/],
+		['deleteProduct', { dealId: '5', lineId: '3/../9' }, /'Product Line ID' must be a number, but got "3\/\.\.\/9"$/],
+		['deleteNote', { dealId: 'abc', noteId: '1' }, /'Deal ID' must be a number, but got "abc"$/],
 	];
 	for (const [operation, parameters, message] of cases) {
 		const calls = [];
@@ -1255,4 +1267,343 @@ test('loadOptions getProducts: catalog from /crm/products with a None option', a
 	const options = await new WebzzConnect().methods.loadOptions.getProducts.call(ctx);
 	assert.deepEqual(calls, [`GET ${BASE}/api/v1/accounts/7/crm/products`]);
 	assert.deepEqual(options, [{ name: 'None (Custom Line)', value: '' }, { name: 'Pro plan', value: '12' }]);
+});
+
+// --- Node version 1.2 (0.7.0): resource locators, Simplify, owner picker, copy ---
+
+const rl = (value, mode = 'list') => ({ __rl: true, mode, value });
+
+async function run12({ parameters, respond = () => ({}), typeVersion = 1.2 }) {
+	const calls = [];
+	const ctx = execContext({ parameters, calls, typeVersion });
+	ctx.helpers.httpRequestWithAuthentication = async (credential, options) => {
+		calls.push({ method: options.method, url: options.url, body: options.body, qs: options.qs });
+		return respond(options);
+	};
+	const out = await new WebzzConnect().execute.call(ctx);
+	return { calls, items: out[0].map((entry) => entry.json) };
+}
+
+test('v1.2: a resource locator Contact ID hits /contacts/5; a v1 string still does', async () => {
+	const fromList = await run12({ parameters: { resource: 'contact', operation: 'get', contactId: rl('5') } });
+	assert.deepEqual(summary(fromList.calls), [`GET ${BASE}/api/v1/accounts/7/contacts/5 null`]);
+	const byId = await run12({ parameters: { resource: 'contact', operation: 'get', contactId: rl('5', 'id') } });
+	assert.deepEqual(summary(byId.calls), [`GET ${BASE}/api/v1/accounts/7/contacts/5 null`]);
+	const v1 = await run12({ parameters: { resource: 'contact', operation: 'get', contactId: '5' }, typeVersion: 1 });
+	assert.deepEqual(summary(v1.calls), [`GET ${BASE}/api/v1/accounts/7/contacts/5 null`]);
+	const deal = await run12({ parameters: { resource: 'deal', operation: 'get', dealId: rl('9') } });
+	assert.deepEqual(summary(deal.calls), [`GET ${A}/deals/9 null`]);
+	const conversation = await run12({ parameters: { resource: 'conversation', operation: 'get', conversationId: rl('4') } });
+	assert.deepEqual(summary(conversation.calls), [`GET ${C}/4 null`]);
+});
+
+test('v1.2: Deal Create sends the locator contact as contact_id; a non-numeric one is refused', async () => {
+	const { calls } = await run12({
+		parameters: { resource: 'deal', operation: 'create', title: 'T', contactId: rl('5'), pipelineId: '', stageId: '' },
+		respond: () => ({ id: 1 }),
+	});
+	assert.deepEqual(summary(calls), [`POST ${A}/deals {"title":"T","contact_id":"5"}`]);
+	const refused = [];
+	await assert.rejects(
+		run12({ parameters: { resource: 'deal', operation: 'create', title: 'T', contactId: rl('Dana', 'id') }, respond: (o) => refused.push(o) }),
+		(error) => {
+			assert.ok(error instanceof NodeOperationError);
+			assert.match(error.message, /^'Contact ID' must be a number, but got "Dana"$/);
+			return true;
+		},
+	);
+	assert.equal(refused.length, 0);
+	// Conversation Create and the template send validate the contact the same way.
+	await assert.rejects(
+		run12({ parameters: { resource: 'conversation', operation: 'create', inboxId: '3', contactId: 'x' }, typeVersion: 1 }),
+		/'Contact ID' must be a number/,
+	);
+});
+
+const RAW_CONTACT = {
+	id: 5, name: 'Dana', email: 'dana@example.com', phone_number: '+15550001111', identifier: null, blocked: false,
+	custom_attributes: { plan: 'pro' }, additional_attributes: { city: 'Haifa' }, thumbnail: '', availability_status: 'offline',
+	last_activity_at: 1, created_at: 2, contact_inboxes: [], wz_internal: 1,
+};
+const RAW_DEAL = {
+	id: 9, title: 'Website', value: '100.0', currency: 'ILS', position: 1, pipeline_id: 2, stage_id: 3, status: 'open',
+	contact: { id: 5, name: 'Dana', phone_number: '+15550001111', email: 'dana@example.com', thumbnail: '', labels: [] },
+	owner: { id: 11, name: 'Maya', thumbnail: '' }, lost_reason: null, custom_attributes: {}, created_at: 1, updated_at: 2,
+};
+const RAW_CONVERSATION = {
+	id: 4, status: 'open', inbox_id: 3, uuid: 'u', can_reply: true, labels: ['vip'], custom_attributes: { step: 1 },
+	unread_count: 2, last_activity_at: 3, timestamp: 3, priority: null,
+	meta: { sender: { id: 5, name: 'Dana', phone_number: '+15550001111', email: 'x' }, assignee: { id: 11, name: 'Maya', email: 'm' }, channel: 'Channel::Whatsapp' },
+	messages: [{ id: 70, content: 'Hi there' }],
+};
+
+test('Simplify: trims Contact Get, Deal Get and Conversation Get Many to at most 10 keys; off or v1 returns raw', async () => {
+	const contact = (simplify, typeVersion = 1.2) =>
+		run12({ parameters: { resource: 'contact', operation: 'get', contactId: rl('5'), simplify }, respond: () => ({ payload: RAW_CONTACT }), typeVersion });
+	const simple = (await contact(true)).items[0];
+	assert.deepEqual(Object.keys(simple), ['id', 'name', 'email', 'phone_number', 'identifier', 'blocked', 'custom_attributes', 'last_activity_at', 'created_at']);
+	const raw = (await contact(false)).items[0];
+	assert.equal(raw.additional_attributes.city, 'Haifa');
+	assert.equal(raw.wz_internal, undefined);
+	assert.deepEqual((await contact(true, 1.1)).items[0], raw);
+
+	const deal = (simplify, typeVersion = 1.2) =>
+		run12({ parameters: { resource: 'deal', operation: 'get', dealId: rl('9'), simplify }, respond: () => RAW_DEAL, typeVersion });
+	assert.deepEqual((await deal(true)).items[0], {
+		id: 9, title: 'Website', value: '100.0', currency: 'ILS', status: 'open', pipeline_id: 2, stage_id: 3,
+		contact: { id: 5, name: 'Dana', phone_number: '+15550001111', email: 'dana@example.com' },
+		owner: { id: 11, name: 'Maya' }, updated_at: 2,
+	});
+	assert.deepEqual((await deal(false)).items[0], RAW_DEAL);
+	assert.deepEqual((await deal(true, 1)).items[0], RAW_DEAL);
+	const ownerless = await run12({ parameters: { resource: 'deal', operation: 'get', dealId: rl('9'), simplify: true }, respond: () => ({ ...RAW_DEAL, owner: null }) });
+	assert.equal(ownerless.items[0].owner, null);
+
+	const many = (simplify, typeVersion = 1.2) =>
+		run12({
+			parameters: { resource: 'conversation', operation: 'getAll', filters: {}, returnAll: false, limit: 5, simplify },
+			respond: () => ({ data: { payload: [RAW_CONVERSATION] } }),
+			typeVersion,
+		});
+	const [conversation] = (await many(true)).items;
+	assert.deepEqual(conversation, {
+		id: 4, status: 'open', inbox_id: 3, contact: { id: 5, name: 'Dana', phone_number: '+15550001111' },
+		assignee: { id: 11, name: 'Maya' }, labels: ['vip'], custom_attributes: { step: 1 }, last_message: 'Hi there',
+		unread_count: 2, last_activity_at: 3,
+	});
+	for (const item of [simple, (await deal(true)).items[0], conversation]) assert.ok(Object.keys(item).length <= 10);
+	// The last entry of messages can be an activity: last_non_activity_message wins when present.
+	const withActivity = {
+		...RAW_CONVERSATION,
+		messages: [{ id: 71, content: 'Assigned to Maya by Default Policy', message_type: 2 }],
+		last_non_activity_message: { id: 70, content: 'Hi there', message_type: 0 },
+	};
+	const activity = await run12({
+		parameters: { resource: 'conversation', operation: 'get', conversationId: rl('4'), simplify: true },
+		respond: () => withActivity,
+	});
+	assert.equal(activity.items[0].last_message, 'Hi there');
+	const noMessages = await run12({
+		parameters: { resource: 'conversation', operation: 'get', conversationId: rl('4'), simplify: true },
+		respond: () => ({ ...RAW_CONVERSATION, messages: [], last_non_activity_message: null }),
+	});
+	assert.equal(noMessages.items[0].last_message, null);
+	assert.deepEqual((await many(false)).items[0], RAW_CONVERSATION);
+	assert.deepEqual((await many(true, 1)).items[0], RAW_CONVERSATION);
+});
+
+function listContext(respond) {
+	const calls = [];
+	const ctx = {
+		getNode: () => ({ ...node, typeVersion: 1.2 }),
+		getNodeParameter: (name, fallback) => (name === 'authentication' ? 'oAuth2' : fallback),
+		getCredentials: async () => ({ oauthTokenData: { account_id: 7 } }),
+		helpers: {
+			httpRequestWithAuthentication: async (credential, options) => {
+				calls.push({ method: options.method, url: options.url, qs: options.qs });
+				const answer = respond(options);
+				if (answer?.httpCode) throw answer;
+				return answer;
+			},
+		},
+	};
+	return { ctx, calls };
+}
+
+test('listSearch searchContacts: search with a filter, the contact list without; paginationToken is the next page', async () => {
+	const methods = new WebzzConnect().methods.listSearch;
+	const found = listContext(() => ({ meta: { has_more: true }, payload: [{ id: 5, name: 'Dana', phone_number: '+15550001111' }, { id: 6, name: 'Eli', email: 'eli@example.com' }, { id: 7, name: 'Noa' }] }));
+	const result = await methods.searchContacts.call(found.ctx, 'da', '2');
+	assert.deepEqual(found.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [
+		`GET ${BASE}/api/v1/accounts/7/contacts/search {"q":"da","page":2}`,
+	]);
+	assert.deepEqual(result, {
+		results: [
+			{ name: 'Dana (+15550001111)', value: '5', url: `${BASE}/app/accounts/7/contacts/5` },
+			{ name: 'Eli (eli@example.com)', value: '6', url: `${BASE}/app/accounts/7/contacts/6` },
+			{ name: 'Noa (#7)', value: '7', url: `${BASE}/app/accounts/7/contacts/7` },
+		],
+		paginationToken: '3',
+	});
+
+	const lastPage = listContext(() => ({ meta: { has_more: false }, payload: [{ id: 5, name: 'Dana' }] }));
+	assert.equal((await methods.searchContacts.call(lastPage.ctx, 'da')).paginationToken, undefined);
+
+	const full = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, name: `C${index}` }));
+	const all = listContext(() => ({ meta: { count: 250, current_page: 1 }, payload: full }));
+	const listed = await methods.searchContacts.call(all.ctx, '');
+	assert.deepEqual(all.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [`GET ${BASE}/api/v1/accounts/7/contacts {"page":1}`]);
+	assert.equal(listed.results.length, 100);
+	assert.equal(listed.paginationToken, '2');
+	const short = listContext(() => ({ meta: { count: 1 }, payload: [{ id: 1, name: 'A' }] }));
+	assert.equal((await methods.searchContacts.call(short.ctx)).paginationToken, undefined);
+});
+
+test('listSearch searchConversations: digits are a conversation number and a contact search; text searches contacts, then their conversations', async () => {
+	const methods = new WebzzConnect().methods.listSearch;
+	const link = (id) => `${BASE}/app/accounts/7/conversations/${id}`;
+	// Routes: the direct lookup, the contact search, and each contact's conversations.
+	const digits = ({ direct, contacts = [], conversationsOf = {} }) =>
+		listContext((options) => {
+			if (options.url.endsWith('/contacts/search')) return { payload: contacts };
+			const owned = /\/contacts\/(\d+)\/conversations$/.exec(options.url);
+			if (owned) return { payload: conversationsOf[owned[1]] ?? [] };
+			return direct;
+		});
+
+	// A conversation number with no matching contact: the conversation alone.
+	const one = digits({ direct: RAW_CONVERSATION });
+	assert.deepEqual(await methods.searchConversations.call(one.ctx, '4'), {
+		results: [{ name: '#4 · Dana · open', value: '4', url: link(4) }],
+	});
+	assert.deepEqual(one.calls.map((c) => `${c.method} ${c.url}`), [
+		`GET ${C}/4`,
+		`GET ${BASE}/api/v1/accounts/7/contacts/search`,
+	]);
+
+	// Nothing found either way: empty, the 404 is not an error.
+	const missing = digits({ direct: refusal(404, { error: 'Resource could not be found' }) });
+	assert.deepEqual(await methods.searchConversations.call(missing.ctx, '999'), { results: [] });
+
+	// A phone typed as digits: the lookup 404s, the contact's conversations are listed.
+	const phone = digits({
+		direct: refusal(404, { error: 'Resource could not be found' }),
+		contacts: [{ id: 5, name: 'Dana', phone_number: '+972501110009' }],
+		conversationsOf: { 5: [{ id: 61, status: 'open', last_activity_at: 9, meta: { sender: { name: 'Dana' } } }] },
+	});
+	assert.deepEqual(await methods.searchConversations.call(phone.ctx, '0501110009'), {
+		results: [{ name: '#61 · Dana · open', value: '61', url: link(61) }],
+	});
+	assert.equal(phone.calls[1].qs.q, '0501110009');
+
+	// Both hit: the direct conversation first, then the contact's others, without a duplicate.
+	const both = digits({
+		direct: RAW_CONVERSATION,
+		contacts: [{ id: 5, name: 'Dana' }],
+		conversationsOf: {
+			5: [
+				{ id: 62, status: 'resolved', last_activity_at: 1, meta: { sender: { name: 'Dana' } } },
+				{ ...RAW_CONVERSATION, last_activity_at: 99 },
+			],
+		},
+	});
+	assert.deepEqual((await methods.searchConversations.call(both.ctx, '4')).results.map((r) => r.value), ['4', '62']);
+
+	// A failing lookup other than 404 is an error.
+	await assert.rejects(
+		methods.searchConversations.call(digits({ direct: refusal(500, { error: 'down' }) }).ctx, '4'),
+		/down/,
+	);
+
+	// Text: the first page of matching contacts, the conversations of the first five, newest activity first.
+	const contacts = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, name: `Dana ${index}` }));
+	const conversationsOf = {
+		1: [{ id: 40, status: 'open', last_activity_at: 100, meta: { sender: { name: 'Dana 0' } } }],
+		2: [
+			{ id: 41, status: 'resolved', last_activity_at: 300, meta: { sender: { name: 'Dana 1' } } },
+			{ id: 42, status: 'open', last_activity_at: 50, meta: { sender: { name: 'Dana 1' } } },
+		],
+		3: [],
+		4: [{ id: 43, status: 'pending', last_activity_at: 200, meta: { sender: { name: 'Dana 3' } } }],
+		5: [],
+	};
+	const byText = listContext((options) => {
+		if (options.url.endsWith('/contacts/search')) return { meta: { has_more: true }, payload: contacts };
+		const id = /\/contacts\/(\d+)\/conversations$/.exec(options.url)[1];
+		return { payload: conversationsOf[id] };
+	});
+	const result = await methods.searchConversations.call(byText.ctx, 'dana', '3');
+	const urls = byText.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs ?? null)}`);
+	assert.deepEqual(urls[0], `GET ${BASE}/api/v1/accounts/7/contacts/search {"q":"dana","page":1}`);
+	assert.deepEqual(urls.slice(1).sort(), [1, 2, 3, 4, 5].map((id) => `GET ${BASE}/api/v1/accounts/7/contacts/${id}/conversations null`));
+	assert.deepEqual(result, {
+		results: [
+			{ name: '#41 · Dana 1 · resolved', value: '41', url: `${C.replace('/api/v1', '/app')}/41` },
+			{ name: '#43 · Dana 3 · pending', value: '43', url: `${C.replace('/api/v1', '/app')}/43` },
+			{ name: '#40 · Dana 0 · open', value: '40', url: `${C.replace('/api/v1', '/app')}/40` },
+			{ name: '#42 · Dana 1 · open', value: '42', url: `${C.replace('/api/v1', '/app')}/42` },
+		],
+	});
+
+	// No filter: all conversations, page by page.
+	const full = Array.from({ length: 25 }, (_, index) => ({ ...RAW_CONVERSATION, id: index + 1 }));
+	const page = listContext(() => ({ data: { meta: {}, payload: full } }));
+	const listed = await methods.searchConversations.call(page.ctx, '', '2');
+	assert.deepEqual(page.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [`GET ${C} {"status":"all","page":2}`]);
+	assert.equal(listed.results.length, 25);
+	assert.equal(listed.paginationToken, '3');
+});
+
+test('listSearch searchDeals and getOwners: /crm/deals with q and page, people from /agents', async () => {
+	const methods = new WebzzConnect().methods;
+	const deals = Array.from({ length: 25 }, (_, index) => ({ id: index + 1, title: `D${index}`, contact: { name: 'Dana' } }));
+	const found = listContext(() => ({ payload: deals }));
+	const result = await methods.listSearch.searchDeals.call(found.ctx, 'web');
+	assert.deepEqual(found.calls.map((c) => `${c.method} ${c.url} ${JSON.stringify(c.qs)}`), [`GET ${A}/deals {"q":"web","page":1}`]);
+	assert.deepEqual(result.results[0], { name: 'D0 · Dana', value: '1' });
+	assert.equal(result.paginationToken, '2');
+
+	const people = listContext(() => [{ id: 11, available_name: 'Maya', name: 'Maya K' }, { id: 12, name: 'Ron' }]);
+	assert.deepEqual(await methods.loadOptions.getOwners.call(people.ctx), [
+		{ name: 'Maya', value: '11' },
+		{ name: 'Ron', value: '12' },
+	]);
+	assert.deepEqual(people.calls.map((c) => c.url), [`${BASE}/api/v1/accounts/7/agents`]);
+});
+
+// Every property, including the options of collections and the values of fixed collections.
+function allProperties(properties) {
+	return properties.flatMap((property) => [
+		property,
+		...allProperties((property.options ?? []).filter((option) => option.displayName)),
+		...allProperties((property.options ?? []).flatMap((option) => option.values ?? [])),
+	]);
+}
+const description = new WebzzConnect().description;
+
+test('description: Resource lists Connection; ID fields are text before 1.2 and resource locators from 1.2', () => {
+	assert.deepEqual(description.properties.find((p) => p.name === 'resource').options.map((o) => o.value), [
+		'connection', 'contact', 'conversation', 'deal', 'whatsAppTemplate',
+	]);
+	for (const name of ['contactId', 'dealId', 'conversationId']) {
+		const variants = description.properties.filter((p) => p.name === name);
+		assert.ok(variants.some((p) => p.type === 'string' && p.displayOptions.show['@version'].join() === '1,1.1'), name);
+		const locators = variants.filter((p) => p.type === 'resourceLocator');
+		assert.ok(locators.length > 0, name);
+		for (const locator of locators) {
+			assert.deepEqual(locator.displayOptions.show['@version'], [{ _cnd: { gte: 1.2 } }]);
+			assert.deepEqual(locator.modes.map((mode) => mode.name), ['list', 'id']);
+		}
+	}
+	const owners = allProperties(description.properties).filter((p) => p.name === 'ownerId');
+	assert.ok(owners.some((p) => p.type === 'options' && p.typeOptions.loadOptionsMethod === 'getOwners'));
+});
+
+test('codex: the node field is the scoped node type', () => {
+	const fs = require('fs');
+	const path = require('path');
+	const codex = (file) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nodes', file), 'utf8')).node;
+	assert.equal(codex('WebzzConnect/WebzzConnect.node.json'), '@webzzconnect/n8n-nodes-webzzconnect.webzzConnect');
+	assert.equal(codex('WebzzConnectTrigger/WebzzConnectTrigger.node.json'), '@webzzconnect/n8n-nodes-webzzconnect.webzzConnectTrigger');
+});
+
+test('copy: actions have no articles, placeholders start with e.g., error copy avoids blame words', () => {
+	const trigger = new WebzzConnectTrigger().description;
+	const properties = allProperties([...description.properties, ...trigger.properties]);
+	const actions = properties.flatMap((p) => (p.options ?? []).map((o) => o.action).filter(Boolean));
+	assert.ok(actions.length > 30);
+	for (const action of actions) assert.doesNotMatch(action, /(^|\s)(a|an|the)(\s|$)/i, action);
+
+	const placeholders = [
+		...properties.map((p) => p.placeholder),
+		...properties.flatMap((p) => (p.modes ?? []).map((mode) => mode.placeholder)),
+	].filter(Boolean);
+	for (const placeholder of placeholders) {
+		if (!placeholder.startsWith('Add ')) assert.match(placeholder, /^e\.g\. /, placeholder);
+	}
+
+	const { COPY, ERROR_COPY } = require('../dist/nodes/WebzzConnect/GenericFunctions.js');
+	for (const text of [...Object.values(COPY), ...Object.values(ERROR_COPY)]) {
+		assert.doesNotMatch(text.replace(/\([a-z_]+\)$/, ''), /error|problem|failure|mistake/i, text);
+	}
 });

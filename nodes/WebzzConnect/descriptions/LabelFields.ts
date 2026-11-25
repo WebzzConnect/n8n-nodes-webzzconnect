@@ -29,7 +29,7 @@ export function labelFields(
 			type: 'string',
 			required: true,
 			default: '',
-			placeholder: 'vip, hot-lead',
+			placeholder: 'e.g. vip, hot-lead',
 			displayOptions: { show: { ...show, '@version': [1] } },
 			description: TEXT_HELP[operation],
 		},

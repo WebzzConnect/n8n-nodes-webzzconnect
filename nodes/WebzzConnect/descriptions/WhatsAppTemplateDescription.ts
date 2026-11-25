@@ -1,6 +1,7 @@
 import type { INodeProperties } from 'n8n-workflow';
 
 import { STATUS_ON_SEND } from './ConversationDescription';
+import { idField } from './Locators';
 
 const show = (operations: string[]) => ({ resource: ['whatsAppTemplate'], operation: operations });
 
@@ -16,7 +17,7 @@ export const whatsAppTemplateOperations: INodeProperties[] = [
 				name: 'Send',
 				value: 'send',
 				description: 'Send an approved WhatsApp template to a contact',
-				action: 'Send an approved template',
+				action: 'Send template',
 			},
 		],
 		default: 'send',
@@ -35,15 +36,13 @@ export const whatsAppTemplateFields: INodeProperties[] = [
 		description:
 			'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 	},
-	{
+	...idField({
 		displayName: 'Contact ID',
 		name: 'contactId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: { show: show(['send']) },
+		searchListMethod: 'searchContacts',
+		show: show(['send']),
 		description: 'The contact must have a phone number',
-	},
+	}),
 	{
 		displayName: 'Status',
 		name: 'initialStatus',
@@ -99,7 +98,7 @@ export const whatsAppTemplateFields: INodeProperties[] = [
 		default: {},
 		displayOptions: { show: show(['send']) },
 		description:
-			'Only needed when the template is set by an expression and Template Fields cannot load. Values for the {{1}}, {{2}}, ... body placeholders, in order, one entry per placeholder. When filled, these replace the body fields of Template Fields.',
+			"Only needed when the template is set by an expression and 'Template Fields' cannot load. Values for the {{1}}, {{2}}, ... body placeholders, in order, one entry per placeholder. When filled, these replace the body fields of 'Template Fields'.",
 		options: [
 			{
 				displayName: 'Variable',

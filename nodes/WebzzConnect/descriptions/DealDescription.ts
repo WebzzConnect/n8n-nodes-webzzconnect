@@ -1,6 +1,30 @@
 import type { INodeProperties } from 'n8n-workflow';
 
+import { BEFORE_V12, FROM_V12, idField, simplifyField } from './Locators';
+
 const show = (operations: string[]) => ({ resource: ['deal'], operation: operations });
+
+/** Deal owner: an ID before 1.2, a people picker from 1.2. Must be a member of the deal's pipeline. */
+const ownerFields: INodeProperties[] = [
+	{
+		displayName: 'Owner ID',
+		name: 'ownerId',
+		type: 'string',
+		default: '',
+		displayOptions: { show: BEFORE_V12 },
+		description: "ID of the person who owns the deal. Must be a member of the deal's pipeline.",
+	},
+	{
+		displayName: 'Owner Name or ID',
+		name: 'ownerId',
+		type: 'options',
+		typeOptions: { loadOptionsMethod: 'getOwners' },
+		default: '',
+		displayOptions: { show: FROM_V12 },
+		description:
+			'The person who owns the deal. Must be a member of the deal\'s pipeline. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+];
 
 export const dealOperations: INodeProperties[] = [
 	{
@@ -14,74 +38,74 @@ export const dealOperations: INodeProperties[] = [
 				name: 'Add Note',
 				value: 'addNote',
 				description: 'Add a note to a deal (also shown on the contact notes)',
-				action: 'Add a note to a deal',
+				action: 'Add note to deal',
 			},
 			{
-				name: 'Add Product',
+				name: 'Add Product Line',
 				value: 'addProduct',
 				description: 'Add a product line to a deal; the deal value becomes the sum of its lines',
-				action: 'Add a product line to a deal',
+				action: 'Add product line to deal',
 			},
 			{
 				name: 'Create',
 				value: 'create',
 				description: 'Create a deal',
-				action: 'Create a deal',
+				action: 'Create deal',
 			},
 			{
 				name: 'Delete Note',
 				value: 'deleteNote',
 				description: 'Delete a note of a deal',
-				action: 'Delete a note of a deal',
+				action: 'Delete deal note',
 			},
 			{
-				name: 'Delete Product',
+				name: 'Delete Product Line',
 				value: 'deleteProduct',
 				description: 'Remove a product line from a deal',
-				action: 'Remove a product line from a deal',
+				action: 'Delete product line from deal',
 			},
-			{ name: 'Get', value: 'get', description: 'Get a deal by ID', action: 'Get a deal' },
+			{ name: 'Get', value: 'get', description: 'Retrieve a deal', action: 'Get deal' },
+			{
+				name: 'Get Many',
+				value: 'search',
+				description: 'Retrieve a list of deals, with search and filters',
+				action: 'Get many deals',
+			},
 			{
 				name: 'Get Notes',
 				value: 'getNotes',
 				description: 'List the notes of a deal, newest first',
-				action: 'Get the notes of a deal',
+				action: 'Get deal notes',
 			},
 			{
-				name: 'Get Products',
+				name: 'Get Product Lines',
 				value: 'getProducts',
 				description: 'List the product lines of a deal',
-				action: 'Get the product lines of a deal',
+				action: 'Get deal product lines',
 			},
 			{
 				name: 'Move Stage',
 				value: 'moveStage',
 				description: 'Move a deal to another stage (including won and lost)',
-				action: 'Move a deal to another stage',
-			},
-			{
-				name: 'Search',
-				value: 'search',
-				description: 'Search and filter deals',
-				action: 'Search deals',
+				action: 'Move deal to stage',
 			},
 			{
 				name: 'Update',
 				value: 'update',
 				description: 'Update a deal',
-				action: 'Update a deal',
+				action: 'Update deal',
 			},
 			{
 				name: 'Update Note',
 				value: 'updateNote',
 				description: 'Change the text of a note of a deal',
-				action: 'Update a note of a deal',
+				action: 'Update deal note',
 			},
 			{
-				name: 'Update Product',
+				name: 'Update Product Line',
 				value: 'updateProduct',
 				description: 'Change a product line of a deal; the deal value is recalculated',
-				action: 'Update a product line of a deal',
+				action: 'Update deal product line',
 			},
 		],
 		default: 'create',
@@ -98,15 +122,13 @@ export const dealFields: INodeProperties[] = [
 		default: '',
 		displayOptions: { show: show(['create']) },
 	},
-	{
+	...idField({
 		displayName: 'Contact ID',
 		name: 'contactId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: { show: show(['create']) },
+		searchListMethod: 'searchContacts',
+		show: show(['create']),
 		description: 'The contact this deal belongs to',
-	},
+	}),
 	{
 		displayName: 'Pipeline Name or ID',
 		name: 'pipelineId',
@@ -140,7 +162,7 @@ export const dealFields: INodeProperties[] = [
 				name: 'currency',
 				type: 'string',
 				default: '',
-				placeholder: 'ILS',
+				placeholder: 'e.g. ILS',
 			},
 			{
 				displayName: 'Custom Attributes',
@@ -166,14 +188,7 @@ export const dealFields: INodeProperties[] = [
 				type: 'dateTime',
 				default: '',
 			},
-			{
-				displayName: 'Owner ID',
-				name: 'ownerId',
-				type: 'string',
-				default: '',
-				description:
-					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
-			},
+			...ownerFields,
 			{
 				displayName: 'Value',
 				name: 'value',
@@ -185,29 +200,27 @@ export const dealFields: INodeProperties[] = [
 		],
 	},
 
-	// get, update, moveStage, notes
-	{
+	// get, update, moveStage, notes, product lines
+	...idField({
 		displayName: 'Deal ID',
 		name: 'dealId',
-		type: 'string',
-		required: true,
-		default: '',
-		displayOptions: {
-			show: show([
-				'get',
-				'update',
-				'moveStage',
-				'addNote',
-				'getNotes',
-				'updateNote',
-				'deleteNote',
-				'addProduct',
-				'getProducts',
-				'updateProduct',
-				'deleteProduct',
-			]),
-		},
-	},
+		searchListMethod: 'searchDeals',
+		show: show([
+			'get',
+			'update',
+			'moveStage',
+			'addNote',
+			'getNotes',
+			'updateNote',
+			'deleteNote',
+			'addProduct',
+			'getProducts',
+			'updateProduct',
+			'deleteProduct',
+		]),
+		listHint: 'Search by deal title or contact name',
+	}),
+	simplifyField(show(['get', 'search'])),
 	{
 		displayName: 'Note ID',
 		name: 'noteId',
@@ -237,7 +250,8 @@ export const dealFields: INodeProperties[] = [
 		required: true,
 		default: '',
 		displayOptions: { show: show(['updateProduct', 'deleteProduct']) },
-		description: 'The ID of the line on the deal (from Get Products), not the catalog product ID',
+		description:
+			"The ID of the line on the deal (from 'Get Product Lines'), not the catalog product ID",
 	},
 	{
 		displayName: 'Product Name or ID',
@@ -351,14 +365,7 @@ export const dealFields: INodeProperties[] = [
 				type: 'dateTime',
 				default: '',
 			},
-			{
-				displayName: 'Owner ID',
-				name: 'ownerId',
-				type: 'string',
-				default: '',
-				description:
-					"ID of the person who owns the deal. Must be a member of the deal's pipeline.",
-			},
+			...ownerFields,
 			{ displayName: 'Title', name: 'title', type: 'string', default: '' },
 			{
 				displayName: 'Value',
