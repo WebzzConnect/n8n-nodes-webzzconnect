@@ -1439,16 +1439,61 @@ test('listSearch searchContacts: search with a filter, the contact list without;
 	assert.equal((await methods.searchContacts.call(short.ctx)).paginationToken, undefined);
 });
 
-test('listSearch searchConversations: a number is one GET (404 is empty); text searches contacts, then their conversations', async () => {
+test('listSearch searchConversations: digits are a conversation number and a contact search; text searches contacts, then their conversations', async () => {
 	const methods = new WebzzConnect().methods.listSearch;
-	const one = listContext(() => RAW_CONVERSATION);
-	assert.deepEqual(await methods.searchConversations.call(one.ctx, '4'), {
-		results: [{ name: '#4 · Dana · open', value: '4', url: `${BASE}/app/accounts/7/conversations/4` }],
-	});
-	assert.deepEqual(one.calls.map((c) => `${c.method} ${c.url}`), [`GET ${C}/4`]);
+	const link = (id) => `${BASE}/app/accounts/7/conversations/${id}`;
+	// Routes: the direct lookup, the contact search, and each contact's conversations.
+	const digits = ({ direct, contacts = [], conversationsOf = {} }) =>
+		listContext((options) => {
+			if (options.url.endsWith('/contacts/search')) return { payload: contacts };
+			const owned = /\/contacts\/(\d+)\/conversations$/.exec(options.url);
+			if (owned) return { payload: conversationsOf[owned[1]] ?? [] };
+			return direct;
+		});
 
-	const missing = listContext(() => refusal(404, { error: 'Resource could not be found' }));
+	// A conversation number with no matching contact: the conversation alone.
+	const one = digits({ direct: RAW_CONVERSATION });
+	assert.deepEqual(await methods.searchConversations.call(one.ctx, '4'), {
+		results: [{ name: '#4 · Dana · open', value: '4', url: link(4) }],
+	});
+	assert.deepEqual(one.calls.map((c) => `${c.method} ${c.url}`), [
+		`GET ${C}/4`,
+		`GET ${BASE}/api/v1/accounts/7/contacts/search`,
+	]);
+
+	// Nothing found either way: empty, the 404 is not an error.
+	const missing = digits({ direct: refusal(404, { error: 'Resource could not be found' }) });
 	assert.deepEqual(await methods.searchConversations.call(missing.ctx, '999'), { results: [] });
+
+	// A phone typed as digits: the lookup 404s, the contact's conversations are listed.
+	const phone = digits({
+		direct: refusal(404, { error: 'Resource could not be found' }),
+		contacts: [{ id: 5, name: 'Dana', phone_number: '+972501110009' }],
+		conversationsOf: { 5: [{ id: 61, status: 'open', last_activity_at: 9, meta: { sender: { name: 'Dana' } } }] },
+	});
+	assert.deepEqual(await methods.searchConversations.call(phone.ctx, '0501110009'), {
+		results: [{ name: '#61 · Dana · open', value: '61', url: link(61) }],
+	});
+	assert.equal(phone.calls[1].qs.q, '0501110009');
+
+	// Both hit: the direct conversation first, then the contact's others, without a duplicate.
+	const both = digits({
+		direct: RAW_CONVERSATION,
+		contacts: [{ id: 5, name: 'Dana' }],
+		conversationsOf: {
+			5: [
+				{ id: 62, status: 'resolved', last_activity_at: 1, meta: { sender: { name: 'Dana' } } },
+				{ ...RAW_CONVERSATION, last_activity_at: 99 },
+			],
+		},
+	});
+	assert.deepEqual((await methods.searchConversations.call(both.ctx, '4')).results.map((r) => r.value), ['4', '62']);
+
+	// A failing lookup other than 404 is an error.
+	await assert.rejects(
+		methods.searchConversations.call(digits({ direct: refusal(500, { error: 'down' }) }).ctx, '4'),
+		/down/,
+	);
 
 	// Text: the first page of matching contacts, the conversations of the first five, newest activity first.
 	const contacts = Array.from({ length: 7 }, (_, index) => ({ id: index + 1, name: `Dana ${index}` }));

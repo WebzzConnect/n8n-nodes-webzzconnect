@@ -977,8 +977,9 @@ export class WebzzConnect implements INodeType {
 			},
 
 			/**
-			 * One conversation by its number; by text, the conversations of the first matching contacts
-			 * (newest activity first, no further pages); without a filter, all conversations page by page.
+			 * By text, the conversations of the first matching contacts (newest activity first, no
+			 * further pages). Digits are also tried as a conversation number, listed first (a phone
+			 * typed as digits still finds its contact). Without a filter, all conversations page by page.
 			 */
 			async searchConversations(
 				this: ILoadOptionsFunctions,
@@ -997,18 +998,18 @@ export class WebzzConnect implements INodeType {
 						url: `${base}/${String(conversation.id)}`,
 					};
 				};
-				if (/^\d+$/.test(query)) {
-					try {
-						const conversation = asObject(
-							await wzRawRequest.call(this, 'GET', `/conversations/${query}`),
-						);
-						return { results: conversation.id === undefined ? [] : [item(conversation)] };
-					} catch (error) {
-						if (readErrorInfo(error).status === 404) return { results: [] };
-						return handleApiError.call(this, error);
-					}
-				}
 				if (query) {
+					const direct: IDataObject[] = [];
+					if (/^\d+$/.test(query)) {
+						try {
+							const conversation = asObject(
+								await wzRawRequest.call(this, 'GET', `/conversations/${query}`),
+							);
+							if (conversation.id !== undefined) direct.push(conversation);
+						} catch (error) {
+							if (readErrorInfo(error).status !== 404) handleApiError.call(this, error);
+						}
+					}
 					const contacts = asArray(
 						await wzApiRequest.call(this, 'GET', '/contacts/search', { qs: { q: query, page: 1 } }),
 					).slice(0, CONTACTS_SEARCHED_FOR_CONVERSATIONS);
@@ -1023,10 +1024,17 @@ export class WebzzConnect implements INodeType {
 							),
 						),
 					);
-					const conversations = lists
+					const seen = new Set(direct.map((conversation) => String(conversation.id)));
+					const byContact = lists
 						.flat()
+						.filter((conversation) => {
+							const id = String(conversation.id);
+							if (seen.has(id)) return false;
+							seen.add(id);
+							return true;
+						})
 						.sort((a, b) => Number(b.last_activity_at ?? 0) - Number(a.last_activity_at ?? 0));
-					return { results: conversations.map(item) };
+					return { results: [...direct, ...byContact].map(item) };
 				}
 				const page = pageOf(paginationToken);
 				const response = await wzApiRequest.call(this, 'GET', '/conversations', {
